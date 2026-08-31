@@ -1,0 +1,7 @@
+{
+  "Session003bCreateEmptyUserNegTest": {
+    "TestName": "空用户名创建Session（反向）",
+    "TestNum": "Redfish_Session_003b",
+    "LogBasename": "session_service_create_empty_user_negative"
+  }
+}

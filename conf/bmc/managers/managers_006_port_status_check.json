@@ -1,0 +1,8 @@
+{
+  "Managers006PortStatusCheck": {
+    "TestName": "BMC关键服务端口状态检查",
+    "TestNum": "Redfish_Managers_006",
+    "LogBasename": "managers_006_port_status_check",
+    "TestTime": 60
+  }
+}

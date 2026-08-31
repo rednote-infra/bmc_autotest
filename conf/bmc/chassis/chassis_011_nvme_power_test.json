@@ -1,0 +1,10 @@
+{
+    "Chassis011NvmePowerTest": {
+        "TestName": "Redfish_Chassis_011_NVMe_Power_Test",
+        "TestNum": "Redfish_Chassis_011",
+        "LogBasename": "chassis_011_nvme_power_test",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

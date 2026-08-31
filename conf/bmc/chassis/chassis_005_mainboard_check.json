@@ -1,0 +1,10 @@
+{
+    "MainboardInfoCheck": {
+        "TestName": "MainBoard集合资源信息检查",
+        "TestNum": "Redfish_Chassis_005",
+        "LogBasename": "chassis_005_mainboard_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

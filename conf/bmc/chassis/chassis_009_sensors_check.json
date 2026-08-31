@@ -1,0 +1,47 @@
+{
+    "SensorsInfoCheck": {
+        "TestName": "Sensor集合资源信息检查",
+        "TestNum": "Redfish_Chassis_009",
+        "LogBasename": "chassis_009_sensors_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "RequiredSensorGroups": {
+            "CPU温度": {
+                "source": "temperature",
+                "keywords": ["cpu"],
+                "description": "CPU 温度传感器"
+            },
+            "系统功耗": {
+                "source": "power_control",
+                "keywords": [],
+                "description": "系统整机功耗（PowerControl 非空即满足）"
+            },
+            "内存温度": {
+                "source": "temperature",
+                "keywords": ["dimm", "mem", "memory"],
+                "description": "内存温度传感器"
+            },
+            "硬盘温度": {
+                "source": "temperature",
+                "keywords": ["hdd", "nvme", "disk", "ssd", "m2"],
+                "description": "硬盘/NVMe 温度传感器"
+            },
+            "PCIe卡温度": {
+                "source": "temperature",
+                "keywords": ["gpu", "nic", "pcie", "hca", "riser", "hba"],
+                "description": "PCIe 卡（GPU/网卡/HBA）温度传感器"
+            },
+            "风扇转速": {
+                "source": "fan",
+                "keywords": [],
+                "description": "风扇转速（Fans 集合非空即满足）"
+            },
+            "电源电压输入输出": {
+                "source": "psu",
+                "keywords": [],
+                "description": "电源模块（PowerSupplies 非空即满足）"
+            }
+        }
+    }
+}

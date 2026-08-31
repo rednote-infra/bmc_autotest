@@ -1,0 +1,7 @@
+{
+    "Managers012KvmTest": {
+        "TestName": "BMC KVM 功能测试",
+        "TestNum": "Redfish_Managers_012",
+        "LogBasename": "managers_012_kvm_test"
+    }
+}

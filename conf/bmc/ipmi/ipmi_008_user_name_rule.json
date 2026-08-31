@@ -1,0 +1,53 @@
+{
+    "IpmiUserNameRule": {
+        "TestName": "IPMI带外用户名规则校验（4~16位全英文字母）",
+        "TestNum": "IPMI_User_003",
+        "LogBasename": "ipmi_008_user_name_rule",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "IpmiInterface": "lanplus",
+        "QueryTimeoutSec": 30,
+        "QueryChannel": 1,
+        "TestUserId": 5,
+        "WaitAfterOpSec": 1,
+        "CleanupName": "unused_5",
+        "CleanupPriv": 15,
+        "PositiveCases": [
+            {
+                "name": "abcd",
+                "desc": "4位（最短，全小写）",
+                "expect": "pass"
+            },
+            {
+                "name": "abcdefghijklmnop",
+                "desc": "16位（最长，全小写）",
+                "expect": "pass"
+            },
+            {
+                "name": "ABCDEFGH",
+                "desc": "8位全大写",
+                "expect": "pass"
+            },
+            {
+                "name": "MixedCase",
+                "desc": "混合大小写",
+                "expect": "pass"
+            }
+        ],
+        "NegativeMustFail": [
+            {
+                "name": "abc",
+                "desc": "3位（低于下限4位，必须拦截）",
+                "expect": "fail"
+            }
+        ],
+        "NegativeWarnIfPass": [
+            {
+                "name": "abcdefghijklmnopq",
+                "desc": "17位（超过上限16位，未拦截记WARNING）",
+                "expect": "fail"
+            }
+        ]
+    }
+}

@@ -1,0 +1,18 @@
+{
+    "WebSelLog": {
+        "TestName": "BMC Web SEL日志查询",
+        "TestNum": "Web_011",
+        "LogBasename": "web_011_sel_log",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSec": 10,
+        "LogServicesUri": "/redfish/v1/Managers/1/LogServices",
+        "SelUri": "/redfish/v1/Managers/1/LogServices/SEL/Entries",
+        "RequiredEntryFields": [
+            "Id",
+            "EntryType",
+            "Created"
+        ]
+    }
+}

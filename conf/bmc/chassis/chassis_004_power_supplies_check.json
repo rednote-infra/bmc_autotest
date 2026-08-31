@@ -1,0 +1,10 @@
+{
+    "PowerSuppliesInfoCheck": {
+        "TestName": "PowerSupplies集合资源信息检查",
+        "TestNum": "Redfish_Chassis_004",
+        "LogBasename": "chassis_004_power_supplies_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

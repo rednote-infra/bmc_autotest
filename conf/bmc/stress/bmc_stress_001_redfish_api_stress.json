@@ -1,0 +1,8 @@
+{
+    "BmcStress001RedfishApiStress": {
+        "TestName": "Redfish API 稳定性压测（12h）",
+        "TestNum": "Redfish_BmcStress_001",
+        "LogBasename": "bmc_stress_001_redfish_api_stress",
+        "DurationSeconds": 43200
+    }
+}

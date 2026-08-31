@@ -1,0 +1,7 @@
+{
+    "Managers023SolLogTest": {
+        "TestName": "BMC SOL 串口日志采集测试",
+        "TestNum": "Redfish_Managers_023",
+        "LogBasename": "managers_023_sol_log_test"
+    }
+}

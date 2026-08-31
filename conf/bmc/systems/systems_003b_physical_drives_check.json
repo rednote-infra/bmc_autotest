@@ -1,0 +1,10 @@
+{
+    "PhysicalDrivesInfoCheck": {
+        "TestName": "Storage物理盘信息检查",
+        "TestNum": "Redfish_Systems_003b",
+        "LogBasename": "systems_003b_physical_drives_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

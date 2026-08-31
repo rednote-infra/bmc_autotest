@@ -1,0 +1,45 @@
+{
+  "LogDownloadTest": {
+    "TestName": "一键日志下载测试",
+    "TestNum": "Redfish_Systems_011",
+    "LogBasename": "systems_011_log_download_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+
+    "StandardUrl": "/redfish/v1/Managers/1/LogServices/1/Actions/LogService.CollectDiagnosticData",
+    "StandardBody": {
+      "DiagnosticDataType": "Manager"
+    },
+
+    "Custom": {
+      "Enabled": true,
+      "Manufacturer": "ZTE",
+      "Url": "/redfish/v1/Managers/1/LogServices/Actions/LogServices.ExportLogs",
+      "Body": {},
+      "Comment": "中兴(ZTE) BMC OEM 定制一键日志接口，空 Body POST 即可触发，返回 200"
+    }
+  },
+
+  "LogDownloadTest_Inspur": {
+    "TestName": "一键日志下载测试",
+    "TestNum": "Redfish_Systems_011",
+    "LogBasename": "systems_011_log_download_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+
+    "StandardUrl": "/redfish/v1/Managers/1/LogServices/1/Actions/LogService.CollectDiagnosticData",
+    "StandardBody": {
+      "DiagnosticDataType": "Manager"
+    },
+
+    "Custom": {
+      "Enabled": true,
+      "Manufacturer": "Maginfra",
+      "Url": "/redfish/v1/Managers/1/LogServices/Actions/Oem/Public/CollectAllLog",
+      "Body": {},
+      "Comment": "浪潮(Inspur/Maginfra) BMC OEM 定制一键日志接口，空 Body POST 即可触发"
+    }
+  }
+}

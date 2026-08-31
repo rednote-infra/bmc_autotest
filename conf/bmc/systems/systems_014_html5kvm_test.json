@@ -1,0 +1,10 @@
+{
+  "Systems014Html5KvmTest": {
+    "TestName": "Systems HTML5KVM 创建与最大化测试",
+    "TestNum": "Redfish_Systems_014",
+    "LogBasename": "systems_014_html5kvm_test",
+    "BMC_IP": null,
+    "UserName": null,
+    "PassWord": null
+  }
+}

@@ -1,0 +1,7 @@
+{
+    "Managers025SyslogTest": {
+        "TestName": "BMC Syslog 服务配置与测试告警触发测试",
+        "TestNum": "Redfish_Managers_025",
+        "LogBasename": "managers_025_syslog_test"
+    }
+}

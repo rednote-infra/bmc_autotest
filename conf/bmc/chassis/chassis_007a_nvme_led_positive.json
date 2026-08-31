@@ -1,0 +1,13 @@
+{
+    "ChassisNVMELEDPositiveCheck": {
+        "TestName": "NVMe指示灯操作测试（正向）",
+        "TestNum": "Redfish_Chassis_007a",
+        "LogBasename": "chassis_007a_nvme_led_positive",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "LedStates": ["Lit", "Off"],
+        "ReadBackDelaySeconds": 2,
+        "MaxRetry": 5
+    }
+}

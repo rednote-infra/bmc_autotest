@@ -1,0 +1,16 @@
+{
+    "WebFirmwareVersion": {
+        "TestName": "BMC Web固件版本查询",
+        "TestNum": "Web_003",
+        "LogBasename": "web_003_firmware_version",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSec": 10,
+        "FirmwareInventoryUri": "/redfish/v1/UpdateService/FirmwareInventory",
+        "RequiredComponents": [
+            "BMC",
+            "BIOS"
+        ]
+    }
+}

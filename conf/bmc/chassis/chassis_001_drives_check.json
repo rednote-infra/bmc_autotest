@@ -1,0 +1,10 @@
+{
+    "DrivesInfoCheck": {
+        "TestName": "Drives集合资源信息检查",
+        "TestNum": "Redfish_Chassis_001",
+        "LogBasename": "chassis_001_drives_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

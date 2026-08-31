@@ -1,0 +1,11 @@
+{
+    "Managers026DefaultConfigCheck": {
+        "TestName": "BMC 默认配置合规检查",
+        "TestNum": "Redfish_Managers_026",
+        "LogBasename": "managers_026_default_config_check",
+        "MaxPowerOnDelaySec": 60,
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

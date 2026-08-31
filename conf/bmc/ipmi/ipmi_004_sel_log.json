@@ -1,0 +1,20 @@
+{
+    "IpmiSelLog": {
+        "TestName": "IPMI带外SEL日志查看",
+        "TestNum": "IPMI_Sel_001",
+        "LogBasename": "ipmi_004_sel_log",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "IpmiInterface": "lanplus",
+        "QueryTimeoutSec": 30,
+        "SelInfoTimeoutSec": 15,
+        "MinSelEntries": 0,
+        "SelInfoRequiredFields": [
+            "Version",
+            "Entries",
+            "Free Space",
+            "Overflow"
+        ]
+    }
+}

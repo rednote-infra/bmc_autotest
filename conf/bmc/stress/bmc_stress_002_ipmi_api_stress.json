@@ -1,0 +1,8 @@
+{
+    "BmcStress002IpmiApiStress": {
+        "TestName": "IPMI 接口稳定性压测（12h）",
+        "TestNum": "Redfish_BmcStress_002",
+        "LogBasename": "bmc_stress_002_ipmi_api_stress",
+        "DurationSeconds": 43200
+    }
+}

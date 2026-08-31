@@ -1,0 +1,153 @@
+{
+    "suites": {
+        "chassis": [
+            "chassis_001_drives_check",
+            "chassis_002_fans_check",
+            "chassis_003_network_adapters_check",
+            "chassis_004_power_supplies_check",
+            "chassis_005_mainboard_check",
+            "chassis_006a_uid_led_positive",
+            "chassis_006b_uid_led_negative",
+            "chassis_007a_nvme_led_positive",
+            "chassis_007b_nvme_led_negative",
+            "chassis_009_sensors_check",
+            "chassis_011_nvme_power_test",
+            "chassis_012_history_temp_test",
+            "chassis_013_pcie_devices_check",
+            "chassis_014_fru_check"
+        ],
+        "systems": [
+            "systems_001_processors_check",
+            "systems_002_memory_check",
+            "systems_003a_storage_controller_check",
+            "systems_003b_physical_drives_check",
+            "systems_004_boot_options_test",
+            "systems_005_power_control_test",
+            "systems_006_gpu_check",
+            "systems_007_sel_log_view",
+            "systems_008_sel_log_add_negative",
+            "systems_009_sel_log_modify_negative",
+            "systems_010a_sel_log_clear_positive",
+            "systems_010b_sel_log_clear_negative",
+            "systems_011_log_download_test",
+            "systems_013_bios_check",
+            "systems_014_html5kvm_test"
+        ],
+        "managers": [
+            "managers_001_info_check",
+            "managers_002_network_protocol_check",
+            "managers_003_ethernet_interfaces_check",
+            "managers_004a_sel_log_check",
+            "managers_004b_operatelog_check",
+            "managers_004c_auditlog_check",
+            "managers_006_port_status_check",
+            "managers_006b_port_enable_disable",
+            "managers_007_bmc_reset",
+            "managers_009_timezone_test",
+            "managers_026_default_config_check"
+        ],
+        "account": [
+            "account_001_create_test",
+            "account_002_view_test",
+            "account_003a_role_modify_test",
+            "account_003b_password_modify_test",
+            "account_003c_password_negative_test",
+            "account_004_role_test",
+            "account_005a_delete_test",
+            "account_005b_delete_admin_negative_test",
+            "account_006_max_count_test",
+            "account_007_username_rule_test",
+            "account_008a_disable_test",
+            "account_008b_disable_admin_negative_test",
+            "account_009_online_users_test"
+        ],
+        "session": [
+            "session_001_info_test",
+            "session_002_create_test",
+            "session_003_list_test",
+            "session_003a_create_invalid_cred_negative_test",
+            "session_003b_create_empty_user_negative_test",
+            "session_003c_create_empty_pwd_negative_test",
+            "session_004_get_test",
+            "session_005_delete_test",
+            "session_005a_delete_nonexistent_negative_test",
+            "session_005b_get_nonexistent_negative_test"
+        ],
+        "update": [
+            "update_001_firmware_version_check"
+        ],
+        "ipmi": [
+            "ipmi_001_power_status",
+            "ipmi_002_power_restore_policy",
+            "ipmi_003_fru_info",
+            "ipmi_004_sel_log",
+            "ipmi_005_boot_order",
+            "ipmi_006_user_list",
+            "ipmi_007_user_add",
+            "ipmi_008_user_name_rule",
+            "ipmi_009_user_password_rule",
+            "ipmi_010_user_delete",
+            "ipmi_011_user_modify",
+            "ipmi_012_user_disable",
+            "ipmi_013_user_session"
+        ],
+        "web": [
+            "web_001_login_session",
+            "web_002_hardware_info",
+            "web_003_firmware_version",
+            "web_004_power_control",
+            "web_005_power_restore_policy",
+            "web_006_boot_order",
+            "web_007_uid_control",
+            "web_008_history_curve",
+            "web_009_user_management",
+            "web_010_sensor_info",
+            "web_011_sel_log",
+            "web_012_one_click_log",
+            "web_013_kvm_check",
+            "web_014_config_export",
+            "web_015_lang_switch",
+            "web_016_http_stress"
+        ],
+        "stress": [
+            "bmc_stress_001_redfish_api_stress",
+            "bmc_stress_002_ipmi_api_stress",
+            "bmc_stress_003_bmc_reset_stress"
+        ],
+        "protocol": [
+            "protocol_001_dmtf_compliance"
+        ],
+        "event": [
+            "event_001_get_service",
+            "event_002_get_subscriptions",
+            "event_003_create_subscription",
+            "event_004_get_subscription",
+            "event_006_delete_subscription",
+            "event_009_submit_test_event",
+            "event_010_submit_event_negative"
+        ]
+    },
+    "timeouts": {
+        "default": 120,
+        "chassis_007a_nvme_led_positive": 1500,
+        "account_003a_role_modify_test": 300,
+        "account_003b_password_modify_test": 300,
+        "account_003c_password_negative_test": 360,
+        "account_005b_delete_admin_negative_test": 300,
+        "account_008b_disable_admin_negative_test": 300,
+        "managers_007_bmc_reset": 900,
+        "systems_005_power_control_test": 5400,
+        "bmc_stress_001_redfish_api_stress": 0,
+        "bmc_stress_002_ipmi_api_stress": 0,
+        "bmc_stress_003_bmc_reset_stress": 0,
+        "protocol_001_dmtf_compliance": 180,
+        "web_016_http_stress": 420,
+        "event_001_get_service": 60,
+        "event_002_get_subscriptions": 60,
+        "event_003_create_subscription": 60,
+        "event_004_get_subscription": 60,
+        "event_006_delete_subscription": 60,
+        "event_009_submit_test_event": 60,
+        "event_010_submit_event_negative": 60
+    }
+}

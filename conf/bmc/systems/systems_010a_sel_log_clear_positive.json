@@ -1,0 +1,10 @@
+{
+    "SELLogClearPositiveCheck": {
+        "TestName": "SEL日志清除测试（正向）",
+        "TestNum": "Redfish_Systems_010a",
+        "LogBasename": "systems_010a_sel_log_clear_positive",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

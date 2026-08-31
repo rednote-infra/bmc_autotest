@@ -1,0 +1,7 @@
+{
+    "Managers024SnmpTrapTest": {
+        "TestName": "BMC SNMP Trap 测试告警触发测试",
+        "TestNum": "Redfish_Managers_024",
+        "LogBasename": "managers_024_snmp_trap_test"
+    }
+}

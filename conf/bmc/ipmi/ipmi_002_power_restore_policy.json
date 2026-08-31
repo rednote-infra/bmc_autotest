@@ -1,0 +1,19 @@
+{
+    "IpmiPowerRestorePolicy": {
+        "TestName": "IPMI带外整机通电开机策略设置",
+        "TestNum": "IPMI_Power_002",
+        "LogBasename": "ipmi_002_power_restore_policy",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "IpmiInterface": "lanplus",
+        "QueryTimeoutSec": 30,
+        "WaitAfterSetSec": 3,
+        "ExpectedDefaultPolicy": "previous",
+        "TestPolicies": [
+            "always-off",
+            "always-on",
+            "previous"
+        ]
+    }
+}

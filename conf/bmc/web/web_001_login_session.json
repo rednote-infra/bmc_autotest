@@ -1,0 +1,11 @@
+{
+    "WebLoginSession": {
+        "TestName": "BMC Web登录会话测试",
+        "TestNum": "Web_001",
+        "LogBasename": "web_001_login_session",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSec": 10
+    }
+}

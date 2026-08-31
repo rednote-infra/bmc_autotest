@@ -1,0 +1,10 @@
+{
+    "FirmwareVersionCheck": {
+        "TestName": "固件版本基本信息检查",
+        "TestNum": "Redfish_UpdateService_001",
+        "LogBasename": "update_001_firmware_version_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

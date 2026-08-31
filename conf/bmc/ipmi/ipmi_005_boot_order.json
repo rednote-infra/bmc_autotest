@@ -1,0 +1,43 @@
+{
+    "IpmiBootOrder": {
+        "TestName": "IPMI带外系统启动项设置",
+        "TestNum": "IPMI_Boot_001",
+        "LogBasename": "ipmi_005_boot_order",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "IpmiInterface": "lanplus",
+        "QueryTimeoutSec": 30,
+        "WaitAfterSetSec": 2,
+        "TestBootDevices": [
+            {
+                "dev": "pxe",
+                "options": "efiboot",
+                "expect_keyword": "Force PXE",
+                "expect_data_byte2": "04",
+                "description": "PXE网络启动（EFI）"
+            },
+            {
+                "dev": "disk",
+                "options": "",
+                "expect_keyword": "Force Disk",
+                "expect_data_byte2": "08",
+                "description": "硬盘启动"
+            },
+            {
+                "dev": "bios",
+                "options": "",
+                "expect_keyword": "Force BIOS",
+                "expect_data_byte2": "18",
+                "description": "进入BIOS设置"
+            },
+            {
+                "dev": "none",
+                "options": "",
+                "expect_keyword": "No override",
+                "expect_data_byte2": "00",
+                "description": "恢复默认（无覆盖）"
+            }
+        ]
+    }
+}

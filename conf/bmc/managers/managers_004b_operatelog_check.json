@@ -1,0 +1,8 @@
+{
+  "Managers004bOperateLogCheck": {
+    "TestName": "BMC操作日志服务检查",
+    "TestNum": "Redfish_Managers_004b",
+    "LogBasename": "managers_004b_operatelog_check",
+    "TestTime": 60
+  }
+}

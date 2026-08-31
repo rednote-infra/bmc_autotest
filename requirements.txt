@@ -1,0 +1,30 @@
+# ============================================================
+# bmc_autotest — Python 依赖清单
+# Python >= 3.9
+# ============================================================
+
+# ---------- Redfish 客户端 ----------
+# 旧版 HPE Redfish 库，用于 func/info_check_function.py 中的
+# GET/POST/PATCH/PUT/DELETE 会话操作
+redfish>=3.1.8
+
+# Redfish Python SDK（已开源，PyPI 发布）
+# 项目主页：https://github.com/rednote-infra/redfish-python-sdk
+# 安装：pip install redfish-python-sdk
+# 当前 PyPI 最新版本：1.1.0（2026-08-04 发布）
+redfish-python-sdk>=1.1.0
+
+# ---------- 系统监控 ----------
+# 用于 func/common_function.py、nvme_perf_test.py、
+# mem_load_latency_test.py 等脚本的进程/CPU/内存信息采集
+psutil>=5.9.0
+
+# ---------- HTTP 请求 ----------
+# 用于 func/cpu_perf_function.py 中工具包的下载
+# 版本下限与 redfish-python-sdk 1.1.0 的依赖要求对齐
+requests>=2.31.0
+
+# ---------- 数据验证（redfish-python-sdk 的传递依赖） ----------
+# 版本下限与 redfish-python-sdk 1.1.0 的依赖要求对齐
+pydantic>=2.5.0
+urllib3>=2.0.0

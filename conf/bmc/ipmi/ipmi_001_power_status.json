@@ -1,0 +1,17 @@
+{
+    "IpmiPowerStatus": {
+        "TestName": "IPMI带外电源状态查看与操作",
+        "TestNum": "IPMI_Power_001",
+        "LogBasename": "ipmi_001_power_status",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "IpmiInterface": "lanplus",
+        "QueryTimeoutSec": 30,
+        "WaitAfterCycleSec": 15,
+        "WaitAfterResetSec": 5,
+        "WaitAfterOffSec": 5,
+        "WaitAfterOnSec": 5,
+        "WaitBetweenOpsSec": 3
+    }
+}

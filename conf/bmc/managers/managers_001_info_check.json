@@ -1,0 +1,8 @@
+{
+  "Managers001InfoCheck": {
+    "TestName": "BMC基本信息检查",
+    "TestNum": "Redfish_Managers_001",
+    "LogBasename": "managers_001_info_check",
+    "TestTime": 60
+  }
+}

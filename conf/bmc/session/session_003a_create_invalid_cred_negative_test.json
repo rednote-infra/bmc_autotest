@@ -1,0 +1,7 @@
+{
+  "Session003aCreateInvalidCredNegTest": {
+    "TestName": "无效凭据创建Session（反向）",
+    "TestNum": "Redfish_Session_003a",
+    "LogBasename": "session_service_create_invalid_cred_negative"
+  }
+}

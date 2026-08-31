@@ -1,0 +1,22 @@
+{
+    "WebPowerRestorePolicy": {
+        "TestName": "BMC Web通电开机策略",
+        "TestNum": "Web_005",
+        "LogBasename": "web_005_power_restore_policy",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSec": 10,
+        "SystemUri": "/redfish/v1/Systems/1",
+        "ExpectedDefaults": [
+            "RestorePreviousState",
+            "LastState"
+        ],
+        "AllowableValues": [
+            "AlwaysOn",
+            "AlwaysOff",
+            "RestorePreviousState",
+            "LastState"
+        ]
+    }
+}

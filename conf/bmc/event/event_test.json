@@ -1,0 +1,63 @@
+{
+    "Event001GetService": {
+        "TestName": "EventService 资源查询",
+        "TestNum": "Redfish_Event_001",
+        "LogBasename": "event_001_get_service",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    },
+    "Event002GetSubscriptions": {
+        "TestName": "EventService 订阅集合查询",
+        "TestNum": "Redfish_Event_002",
+        "LogBasename": "event_002_get_subscriptions",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    },
+    "Event003CreateSubscription": {
+        "TestName": "EventService 订阅创建",
+        "TestNum": "Redfish_Event_003",
+        "LogBasename": "event_003_create_subscription",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TestSubDestination": "https://192.0.2.99:9999/test",
+        "TestSubContext": "xhs_test_sub_do_not_keep"
+    },
+    "Event004GetSubscription": {
+        "TestName": "EventService 订阅资源查询",
+        "TestNum": "Redfish_Event_004",
+        "LogBasename": "event_004_get_subscription",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    },
+    "Event006DeleteSubscription": {
+        "TestName": "EventService 订阅删除",
+        "TestNum": "Redfish_Event_006",
+        "LogBasename": "event_006_delete_subscription",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TestSubDestination": "https://192.0.2.99:9999/test",
+        "TestSubContext": "xhs_test_sub_do_not_keep"
+    },
+    "Event009SubmitTestEvent": {
+        "TestName": "EventService 测试事件上报（正向）",
+        "TestNum": "Redfish_Event_009",
+        "LogBasename": "event_009_submit_test_event",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "EventTypes": ["StatusChange", "ResourceUpdated", "ResourceAdded", "ResourceRemoved", "Alert"]
+    },
+    "Event010SubmitEventNegative": {
+        "TestName": "EventService 测试事件上报（反向）",
+        "TestNum": "Redfish_Event_010",
+        "LogBasename": "event_010_submit_event_negative",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

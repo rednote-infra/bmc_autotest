@@ -1,0 +1,26 @@
+{
+    "IpmiUserDelete": {
+        "TestName": "IPMI带外删除用户（正反向：正常删除 + 超管不可删）",
+        "TestNum": "IPMI_User_005",
+        "LogBasename": "ipmi_010_user_delete",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "IpmiInterface": "lanplus",
+        "QueryTimeoutSec": 30,
+        "QueryChannel": 1,
+        "TestUserId": 5,
+        "TestUserName": "ipmiusertest",
+        "TestUserPassword": "Del@Test2024",
+        "TestUserPriv": 2,
+        "WaitAfterOpSec": 2,
+        "CleanupName": "unused_5",
+        "CleanupPriv": 15,
+        "ProtectedUserIds": [
+            1,
+            2,
+            3
+        ],
+        "Note": "IPMI无delete命令，用disable+set name占位实现逻辑删除；保护测试：尝试disable超管用户（ID=3=Admin），应失败（ZTE返回0x82保护错误）"
+    }
+}

@@ -1,0 +1,7 @@
+{
+    "Managers009TimezoneTest": {
+        "TestName": "BMC 时区设置功能测试",
+        "TestNum": "Redfish_Managers_009",
+        "LogBasename": "managers_009_timezone_test"
+    }
+}

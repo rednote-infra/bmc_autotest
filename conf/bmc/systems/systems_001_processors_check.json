@@ -1,0 +1,10 @@
+{
+    "ProcessorsInfoCheck": {
+        "TestName": "Processors集合资源信息检查",
+        "TestNum": "Redfish_Systems_001",
+        "LogBasename": "systems_001_processors_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

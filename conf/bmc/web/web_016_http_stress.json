@@ -1,0 +1,21 @@
+{
+    "WebHttpStress": {
+        "TestName": "BMC Web HTTP稳定性压测",
+        "TestNum": "Web_016",
+        "LogBasename": "web_016_http_stress",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSec": 10,
+        "DurationSeconds": 300,
+        "IntervalSeconds": 2,
+        "MaxResponseSec": 5.0,
+        "StressUris": [
+            "/redfish/v1/Systems/1",
+            "/redfish/v1/Chassis/1/Thermal",
+            "/redfish/v1/Chassis/1/Power",
+            "/redfish/v1/Managers/1",
+            "/redfish/v1/AccountService/Accounts"
+        ]
+    }
+}

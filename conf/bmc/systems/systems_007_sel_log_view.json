@@ -1,0 +1,10 @@
+{
+    "SELLogViewCheck": {
+        "TestName": "SEL日志查看测试",
+        "TestNum": "Redfish_Systems_007",
+        "LogBasename": "systems_007_sel_log_view",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}
