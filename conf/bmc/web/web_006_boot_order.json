@@ -1,0 +1,17 @@
+{
+    "WebBootOrder": {
+        "TestName": "BMC Web启动顺序设置",
+        "TestNum": "Web_006",
+        "LogBasename": "web_006_boot_order",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSec": 10,
+        "SystemUri": "/redfish/v1/Systems/1",
+        "BootOptionsUri": "/redfish/v1/Systems/1/BootOptions",
+        "RequiredBootDevices": [
+            "Pxe",
+            "Hdd"
+        ]
+    }
+}

@@ -1,0 +1,8 @@
+{
+  "Managers005SnmpCheck": {
+    "TestName": "BMC SNMP服务信息检查",
+    "TestNum": "Redfish_Managers_005",
+    "LogBasename": "managers_005_snmp_check",
+    "TestTime": 60
+  }
+}

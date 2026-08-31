@@ -1,0 +1,35 @@
+{
+    "PowerControlTest": {
+        "TestName": "PowerControl操作测试",
+        "TestNum": "Redfish_Systems_005",
+        "LogBasename": "systems_005_power_control_test",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "_comment_InbandIP": "带内 IP，留空则从 BMC IP 末位去掉首字符 '1' 自动推导（如 <bmc_ip> → <inband_ip>）",
+        "InbandIP": "",
+        "_comment_PowerStateTimeoutSeconds": "等待电源状态变化的超时时间（秒）",
+        "PowerStateTimeoutSeconds": 120,
+        "_comment_PowerStatePollIntervalSeconds": "轮询电源状态的间隔（秒）",
+        "PowerStatePollIntervalSeconds": 5,
+        "_comment_OsReadyTimeoutSeconds": "等待 OS 就绪（ping 带内 IP 通）的超时时间（秒），Watchdog 10min",
+        "OsReadyTimeoutSeconds": 600,
+        "_comment_OsReadyPollIntervalSeconds": "ping 带内 IP 的轮询间隔（秒）",
+        "OsReadyPollIntervalSeconds": 10,
+        "_comment_TestSequence": [
+            "测试步骤序列，每项为 [ResetType, description]",
+            "顺序设计原则：确保每步结束后服务器处于已知可操作状态",
+            "ForceOff→On 确保完整关开机，GracefulShutdown→On 覆盖优雅关机，",
+            "ForceRestart/ForcePowerCycle/PowerCycle 覆盖重启类操作"
+        ],
+        "TestSequence": [
+            ["ForceOff",         "强制关机"],
+            ["On",               "开机"],
+            ["GracefulShutdown", "优雅关机"],
+            ["On",               "开机"],
+            ["ForceRestart",     "强制重启"],
+            ["ForcePowerCycle",  "强制掉电重启"],
+            ["PowerCycle",       "掉电重启"]
+        ]
+    }
+}

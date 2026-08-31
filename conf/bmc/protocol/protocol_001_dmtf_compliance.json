@@ -1,0 +1,16 @@
+{
+    "Protocol001DmtfCompliance": {
+        "TestName": "DMTF Redfish 协议合规性检查",
+        "TestNum": "RDSV_BMC_147",
+        "LogBasename": "protocol_001_dmtf_compliance",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSeconds": 30,
+        "ChassisUri":  "/redfish/v1/Chassis/1",
+        "SystemsUri":  "/redfish/v1/Systems/1",
+        "PowerUri":    "/redfish/v1/Chassis/1/Power",
+        "SessionsUri": "/redfish/v1/SessionService/Sessions",
+        "ManagersUri": "/redfish/v1/Managers/1"
+    }
+}

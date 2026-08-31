@@ -1,0 +1,20 @@
+{
+    "IpmiUserSession": {
+        "TestName": "IPMI带外查询在线活动用户",
+        "TestNum": "IPMI_User_008",
+        "LogBasename": "ipmi_013_user_session",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "IpmiInterface": "lanplus",
+        "QueryTimeoutSec": 30,
+        "RequiredSessionFields": [
+            "session handle",
+            "active sessions",
+            "user id",
+            "privilege level",
+            "session type"
+        ],
+        "Note": "session info all 查询所有活动会话；至少应有1个活动session（测试本身的连接）"
+    }
+}

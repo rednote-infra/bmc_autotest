@@ -1,0 +1,8 @@
+{
+  "Managers004cAuditLogCheck": {
+    "TestName": "BMC审计日志服务检查",
+    "TestNum": "Redfish_Managers_004c",
+    "LogBasename": "managers_004c_auditlog_check",
+    "TestTime": 60
+  }
+}

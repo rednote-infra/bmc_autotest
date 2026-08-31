@@ -1,0 +1,8 @@
+{
+  "Managers004aSelLogCheck": {
+    "TestName": "BMC SEL日志服务检查",
+    "TestNum": "Redfish_Managers_004a",
+    "LogBasename": "managers_004a_sel_log_check",
+    "TestTime": 60
+  }
+}

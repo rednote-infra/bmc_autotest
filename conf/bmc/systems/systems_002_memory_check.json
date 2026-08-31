@@ -1,0 +1,10 @@
+{
+    "MemoryInfoCheck": {
+        "TestName": "Memory集合资源信息检查",
+        "TestNum": "Redfish_Systems_002",
+        "LogBasename": "systems_002_memory_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

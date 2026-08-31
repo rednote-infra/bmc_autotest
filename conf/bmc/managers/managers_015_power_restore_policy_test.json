@@ -1,0 +1,10 @@
+{
+    "PowerRestorePolicyTest": {
+        "TestName": "通电开机策略设置与验证",
+        "TestNum": "Redfish_Managers_015",
+        "LogBasename": "managers_015_power_restore_policy_test",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

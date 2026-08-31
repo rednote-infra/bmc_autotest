@@ -1,0 +1,10 @@
+{
+  "Managers019SslCertCheck": {
+    "TestName": "BMC HTTPS SSL 证书检查",
+    "TestNum": "Redfish_Managers_019",
+    "LogBasename": "managers_019_ssl_cert_check",
+    "BMC_IP": null,
+    "UserName": null,
+    "PassWord": null
+  }
+}

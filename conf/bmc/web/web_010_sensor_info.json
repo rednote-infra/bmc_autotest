@@ -1,0 +1,18 @@
+{
+    "WebSensorInfo": {
+        "TestName": "BMC Web传感器信息查询",
+        "TestNum": "Web_010",
+        "LogBasename": "web_010_sensor_info",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSec": 10,
+        "ThermalUri": "/redfish/v1/Chassis/1/Thermal",
+        "PowerUri": "/redfish/v1/Chassis/1/Power",
+        "RequiredSensorTypes": [
+            "Temperature",
+            "Fan",
+            "Voltage"
+        ]
+    }
+}

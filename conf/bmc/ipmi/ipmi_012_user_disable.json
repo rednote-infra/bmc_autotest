@@ -1,0 +1,22 @@
+{
+    "IpmiUserDisable": {
+        "TestName": "IPMI带外禁用用户（正向 + 超管不可禁反向）",
+        "TestNum": "IPMI_User_007",
+        "LogBasename": "ipmi_012_user_disable",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "IpmiInterface": "lanplus",
+        "QueryTimeoutSec": 30,
+        "QueryChannel": 1,
+        "TestUserId": 5,
+        "TestUserName": "ipmiblocktest",
+        "TestUserPassword": "Block@Test2024",
+        "TestUserPriv": 2,
+        "WaitAfterOpSec": 2,
+        "ProtectedAdminId": 3,
+        "CleanupPriv": 15,
+        "CleanupName": "unused_5",
+        "Note": "禁用后校验：user list中IPMI Msg列为false；反向：尝试禁用超管Admin(ID=3)，应失败（ZTE返回0x82保护错误）"
+    }
+}

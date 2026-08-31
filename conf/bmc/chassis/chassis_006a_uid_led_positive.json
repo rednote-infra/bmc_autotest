@@ -1,0 +1,13 @@
+{
+    "ChassisUIDLEDPositiveCheck": {
+        "TestName": "UID指示灯操作测试（正向）",
+        "TestNum": "Redfish_Chassis_006a",
+        "LogBasename": "chassis_006a_uid_led_positive",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "LedStates": ["Lit", "Blinking", "Off"],
+        "ReadBackDelaySeconds": 2,
+        "MaxRetry": 5
+    }
+}

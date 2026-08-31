@@ -1,0 +1,10 @@
+{
+    "BiosInfoCheck": {
+        "TestName": "BIOS基本信息检查",
+        "TestNum": "Redfish_Systems_013",
+        "LogBasename": "systems_013_bios_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

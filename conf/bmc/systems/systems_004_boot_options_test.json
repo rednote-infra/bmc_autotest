@@ -1,0 +1,18 @@
+{
+    "BootOptionsTest": {
+        "TestName": "BootOptions操作测试",
+        "TestNum": "Redfish_Systems_004",
+        "LogBasename": "systems_004_boot_options_test",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "_comment_BootMode": "启动模式：UEFI 或 Legacy",
+        "BootMode": "UEFI",
+        "_comment_BootEnabled": "Override 生效范围：Once（单次）/ Continuous（持续）/ Disabled（禁用）",
+        "BootEnabled": "Once",
+        "_comment_RestoreTarget": "测试完成后恢复的启动项，留空则恢复测试前读取的原始值",
+        "RestoreTarget": "None",
+        "_comment_ReadBackDelaySeconds": "PATCH 后等待 BMC 生效的秒数（部分 BMC 需要 1~3s）",
+        "ReadBackDelaySeconds": 2
+    }
+}

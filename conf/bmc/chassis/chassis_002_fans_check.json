@@ -1,0 +1,10 @@
+{
+    "FansInfoCheck": {
+        "TestName": "Fans集合资源信息检查",
+        "TestNum": "Redfish_Chassis_002",
+        "LogBasename": "chassis_002_fans_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

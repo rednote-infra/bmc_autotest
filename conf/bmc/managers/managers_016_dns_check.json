@@ -1,0 +1,10 @@
+{
+  "Managers016DnsCheck": {
+    "TestName": "BMC DNS 服务配置检查",
+    "TestNum": "Redfish_Managers_016",
+    "LogBasename": "managers_016_dns_check",
+    "BMC_IP": null,
+    "UserName": null,
+    "PassWord": null
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "Session005bGetNonexistNegTest": {
+    "TestName": "获取不存在Session（反向）",
+    "TestNum": "Redfish_Session_005b",
+    "LogBasename": "session_service_get_nonexistent_negative"
+  }
+}

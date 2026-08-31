@@ -1,0 +1,34 @@
+{
+    "IpmiUserModify": {
+        "TestName": "IPMI带外修改用户名/密码/权限",
+        "TestNum": "IPMI_User_006",
+        "LogBasename": "ipmi_011_user_modify",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "IpmiInterface": "lanplus",
+        "QueryTimeoutSec": 30,
+        "QueryChannel": 1,
+        "TestUserId": 5,
+        "InitName": "modtestinit",
+        "InitPassword": "Init@Test2024",
+        "InitPriv": 2,
+        "ModifyNameTo": "modtestfinal",
+        "ModifyPasswordTo": "Final@Test2024",
+        "ModifyPrivSequence": [
+            2,
+            3,
+            4
+        ],
+        "PrivLevelMap": {
+            "1": "CALLBACK",
+            "2": "USER",
+            "3": "OPERATOR",
+            "4": "ADMINISTRATOR",
+            "15": "NO ACCESS"
+        },
+        "WaitAfterOpSec": 2,
+        "CleanupPriv": 15,
+        "CleanupName": "unused_5"
+    }
+}

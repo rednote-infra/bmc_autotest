@@ -1,0 +1,10 @@
+{
+    "PCIeDevicesInfoCheck": {
+        "TestName": "PCIeDevices集合资源信息检查",
+        "TestNum": "Redfish_Chassis_013",
+        "LogBasename": "chassis_013_pcie_devices_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

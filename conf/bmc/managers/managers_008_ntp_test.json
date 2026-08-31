@@ -1,0 +1,7 @@
+{
+    "Managers008NtpTest": {
+        "TestName": "BMC NTP 设置功能测试",
+        "TestNum": "Redfish_Managers_008",
+        "LogBasename": "managers_008_ntp_test"
+    }
+}

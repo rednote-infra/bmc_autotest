@@ -1,0 +1,7 @@
+{
+  "Session003cCreateEmptyPwdNegTest": {
+    "TestName": "空密码创建Session（反向）",
+    "TestNum": "Redfish_Session_003c",
+    "LogBasename": "session_service_create_empty_pwd_negative"
+  }
+}

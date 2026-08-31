@@ -1,0 +1,54 @@
+{
+    "WebHardwareInfo": {
+        "TestName": "BMC Web硬件信息查询",
+        "TestNum": "Web_002",
+        "LogBasename": "web_002_hardware_info",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSec": 10,
+        "CheckItems": [
+            {
+                "name": "CPU静态信息",
+                "uri": "/redfish/v1/Systems/1/Processors",
+                "type": "cpu_from_collection",
+                "required_fields": ["Model", "TotalCores", "ProcessorArchitecture"]
+            },
+            {
+                "name": "内存信息",
+                "uri": "/redfish/v1/Systems/1/Memory",
+                "required_fields": ["Members"]
+            },
+            {
+                "name": "硬盘列表",
+                "uri": "/redfish/v1/Chassis/1/Drives",
+                "required_fields": ["Members"]
+            },
+            {
+                "name": "网络控制器列表",
+                "uri": "/redfish/v1/Chassis/1/NetworkAdapters",
+                "required_fields": ["Members"]
+            },
+            {
+                "name": "GPU/PCIe设备列表",
+                "uri": "/redfish/v1/Chassis/1/PCIeDevices",
+                "type": "gpu_optional"
+            },
+            {
+                "name": "电源信息",
+                "uri": "/redfish/v1/Chassis/1/Power",
+                "required_fields": ["PowerSupplies"]
+            },
+            {
+                "name": "风扇信息",
+                "uri": "/redfish/v1/Chassis/1/Thermal",
+                "required_fields": ["Fans"]
+            },
+            {
+                "name": "主板FRU",
+                "uri": "/redfish/v1/Chassis/1",
+                "required_fields": ["Manufacturer", "Model", "SerialNumber"]
+            }
+        ]
+    }
+}

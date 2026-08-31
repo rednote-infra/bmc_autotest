@@ -1,0 +1,234 @@
+{
+  "_comment": "公共账号配置（BMC_IP/UserName/PassWord 由 runner 通过命令行注入）",
+  "_shared": {
+    "TestAccount": {
+      "UserName": "trf",
+      "Password": "Test@12345",
+      "RoleId": "Operator",
+      "Enabled": true
+    },
+    "AltRoleId": "User",
+    "AltPassword": "NewPass@9876"
+  },
+
+  "AccountCreateTest": {
+    "TestName": "Account创建测试",
+    "TestNum": "Redfish_Account_001",
+    "LogBasename": "account_001_create_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+    "TestAccount": {
+      "UserName": "trf",
+      "Password": "Test@12345",
+      "RoleId": "Operator",
+      "Enabled": true
+    },
+    "AltRoleId": "User",
+    "AltPassword": "NewPass@9876"
+  },
+
+  "AccountViewTest": {
+    "TestName": "Account查看测试",
+    "TestNum": "Redfish_Account_002",
+    "LogBasename": "account_002_view_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+    "TestAccount": {
+      "UserName": "trf",
+      "Password": "Test@12345",
+      "RoleId": "Operator",
+      "Enabled": true
+    },
+    "AltRoleId": "User",
+    "AltPassword": "NewPass@9876"
+  },
+
+  "AccountRoleModifyTest": {
+    "TestName": "Account权限修改测试",
+    "TestNum": "Redfish_Account_003a",
+    "LogBasename": "account_003a_role_modify_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+    "TestAccount": {
+      "UserName": "trf",
+      "Password": "Test@12345",
+      "RoleId": "Operator",
+      "Enabled": true
+    },
+    "AltRoleId": "User",
+    "AltPassword": "NewPass@9876"
+  },
+
+  "AccountPasswordModifyTest": {
+    "TestName": "Account密码修改正向测试",
+    "TestNum": "Redfish_Account_003b",
+    "LogBasename": "account_003b_password_modify_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+    "TestAccount": {
+      "UserName": "trf",
+      "Password": "Test@12345",
+      "RoleId": "Operator",
+      "Enabled": true
+    },
+    "AltRoleId": "User",
+    "AltPassword": "NewPass@9876"
+  },
+
+  "AccountPasswordNegativeTest": {
+    "TestName": "Account密码修改反向测试",
+    "TestNum": "Redfish_Account_003c",
+    "LogBasename": "account_003c_password_negative_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+    "TestAccount": {
+      "UserName": "trf",
+      "Password": "Test@12345",
+      "RoleId": "Operator",
+      "Enabled": true
+    },
+    "AltRoleId": "User",
+    "AltPassword": "NewPass@9876"
+  },
+
+  "AccountRoleTest": {
+    "TestName": "Account角色定义测试",
+    "TestNum": "Redfish_Account_004",
+    "LogBasename": "account_004_role_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+    "TestAccount": {
+      "UserName": "trf",
+      "Password": "Test@12345",
+      "RoleId": "Operator",
+      "Enabled": true
+    },
+    "AltRoleId": "User",
+    "AltPassword": "NewPass@9876"
+  },
+
+  "AccountDeleteTest": {
+    "TestName": "Account删除测试（正向）",
+    "TestNum": "Redfish_Account_005a",
+    "LogBasename": "account_005a_delete_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+    "TestAccount": {
+      "UserName": "trf",
+      "Password": "Test@12345",
+      "RoleId": "Operator",
+      "Enabled": true
+    },
+    "AltRoleId": "User",
+    "AltPassword": "NewPass@9876"
+  },
+
+  "AccountDeleteAdminNegativeTest": {
+    "TestName": "超级管理员不可删除反向验证",
+    "TestNum": "Redfish_Account_005b",
+    "LogBasename": "account_005b_delete_admin_negative_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+    "TestAccount": {
+      "UserName": "trf",
+      "Password": "Test@12345",
+      "RoleId": "Operator",
+      "Enabled": true
+    },
+    "AltRoleId": "User",
+    "AltPassword": "NewPass@9876"
+  },
+
+  "AccountMaxCountTest": {
+    "TestName": "Account创建数量最大化测试",
+    "TestNum": "Redfish_Account_006",
+    "LogBasename": "account_006_max_count_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+    "TestAccount": {
+      "UserName": "trf",
+      "Password": "Test@12345",
+      "RoleId": "Operator",
+      "Enabled": true
+    },
+    "AltRoleId": "User",
+    "AltPassword": "NewPass@9876"
+  },
+
+  "AccountUsernameRuleTest": {
+    "TestName": "Account用户名格式规则测试",
+    "TestNum": "Redfish_Account_007",
+    "LogBasename": "account_007_username_rule_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+    "TestAccount": {
+      "UserName": "trf",
+      "Password": "Test@12345",
+      "RoleId": "Operator",
+      "Enabled": true
+    },
+    "AltRoleId": "User",
+    "AltPassword": "NewPass@9876"
+  },
+
+  "AccountDisableTest": {
+    "TestName": "Account禁用测试（正向）",
+    "TestNum": "Redfish_Account_008a",
+    "LogBasename": "account_008a_disable_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+    "TestAccount": {
+      "UserName": "trf",
+      "Password": "Test@12345",
+      "RoleId": "Operator",
+      "Enabled": true
+    },
+    "AltRoleId": "User",
+    "AltPassword": "NewPass@9876"
+  },
+
+  "AccountDisableAdminNegativeTest": {
+    "TestName": "超级管理员不可禁用反向验证",
+    "TestNum": "Redfish_Account_008b",
+    "LogBasename": "account_008b_disable_admin_negative_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+    "TestAccount": {
+      "UserName": "trf",
+      "Password": "Test@12345",
+      "RoleId": "Operator",
+      "Enabled": true
+    },
+    "AltRoleId": "User",
+    "AltPassword": "NewPass@9876"
+  },
+
+  "AccountOnlineUsersTest": {
+    "TestName": "在线用户查询测试",
+    "TestNum": "Redfish_Account_009",
+    "LogBasename": "account_009_online_users_test",
+    "BMC_IP": "",
+    "UserName": "",
+    "PassWord": "",
+    "TestAccount": {
+      "UserName": "trf",
+      "Password": "Test@12345",
+      "RoleId": "Operator",
+      "Enabled": true
+    },
+    "AltRoleId": "User",
+    "AltPassword": "NewPass@9876"
+  }
+}

@@ -1,0 +1,7 @@
+{
+    "Managers013LldpTest": {
+        "TestName": "BMC LLDP 设置功能测试",
+        "TestNum": "Redfish_Managers_013",
+        "LogBasename": "managers_013_lldp_test"
+    }
+}

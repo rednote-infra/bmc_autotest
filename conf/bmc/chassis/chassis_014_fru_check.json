@@ -1,0 +1,10 @@
+{
+    "FruInfoCheck": {
+        "TestName": "FRU集合资源信息检查",
+        "TestNum": "Redfish_Chassis_014",
+        "LogBasename": "chassis_014_fru_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

@@ -1,0 +1,10 @@
+{
+    "ChassisUIDLEDNegativeCheck": {
+        "TestName": "UID指示灯操作测试（反向）",
+        "TestNum": "Redfish_Chassis_006b",
+        "LogBasename": "chassis_006b_uid_led_negative",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

@@ -1,0 +1,14 @@
+{
+    "WebUidControl": {
+        "TestName": "BMC Web UID灯控制",
+        "TestNum": "Web_007",
+        "LogBasename": "web_007_uid_control",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSec": 10,
+        "ChassisUri": "/redfish/v1/Chassis/1",
+        "SystemUri": "/redfish/v1/Systems/1",
+        "PatchUri": "/redfish/v1/Chassis/1"
+    }
+}

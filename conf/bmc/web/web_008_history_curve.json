@@ -1,0 +1,14 @@
+{
+    "WebHistoryCurve": {
+        "TestName": "BMC Web历史曲线查询",
+        "TestNum": "Web_008",
+        "LogBasename": "web_008_history_curve",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSec": 10,
+        "PowerHistoryUri": "/redfish/v1/Chassis/1/Power",
+        "TempHistoryUri": "/redfish/v1/Chassis/1/Thermal/InletHistoryTemperature",
+        "MinHistoryRecords": 1
+    }
+}

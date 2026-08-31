@@ -1,0 +1,7 @@
+{
+  "Session005aDeleteNonexistNegTest": {
+    "TestName": "删除不存在Session（反向）",
+    "TestNum": "Redfish_Session_005a",
+    "LogBasename": "session_service_delete_nonexistent_negative"
+  }
+}

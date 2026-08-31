@@ -1,0 +1,10 @@
+{
+    "SELLogModifyNegativeCheck": {
+        "TestName": "SEL日志修改反向测试",
+        "TestNum": "Redfish_Systems_009",
+        "LogBasename": "systems_009_sel_log_modify_negative",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

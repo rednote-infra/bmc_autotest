@@ -1,0 +1,10 @@
+{
+    "StorageControllerInfoCheck": {
+        "TestName": "Storage控制器信息检查",
+        "TestNum": "Redfish_Systems_003a",
+        "LogBasename": "systems_003a_storage_controller_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

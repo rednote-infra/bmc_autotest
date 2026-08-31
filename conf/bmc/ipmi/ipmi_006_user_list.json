@@ -1,0 +1,19 @@
+{
+    "IpmiUserList": {
+        "TestName": "IPMI带外查询用户列表",
+        "TestNum": "IPMI_User_001",
+        "LogBasename": "ipmi_006_user_list",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "IpmiInterface": "lanplus",
+        "QueryTimeoutSec": 30,
+        "QueryChannel": 1,
+        "MinUserSlots": 8,
+        "RequiredPrivLevels": [
+            "ADMINISTRATOR",
+            "OPERATOR",
+            "USER"
+        ]
+    }
+}

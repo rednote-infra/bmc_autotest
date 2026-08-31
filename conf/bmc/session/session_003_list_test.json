@@ -1,0 +1,7 @@
+{
+  "Session003ListTest": {
+    "TestName": "获取Session列表",
+    "TestNum": "Redfish_Session_003",
+    "LogBasename": "session_service_list_sessions"
+  }
+}

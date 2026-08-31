@@ -1,0 +1,7 @@
+{
+    "Managers011SnmpTest": {
+        "TestName": "BMC SNMP 设置功能测试",
+        "TestNum": "Redfish_Managers_011",
+        "LogBasename": "managers_011_snmp_test"
+    }
+}

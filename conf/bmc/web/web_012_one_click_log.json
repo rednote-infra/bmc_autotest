@@ -1,0 +1,19 @@
+{
+    "WebOneClickLog": {
+        "TestName": "BMC Web一键日志收集",
+        "TestNum": "Web_012",
+        "LogBasename": "web_012_one_click_log",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSec": 30,
+        "StandardActionUri": "/redfish/v1/Managers/1/LogServices/Actions/LogServices.ExportLogs",
+        "CustomActionUri": "/redfish/v1/Managers/1/LogServices/Actions/Oem/Public/CollectAllLog",
+        "ActionBody": {},
+        "SuccessCodes": [
+            200,
+            202,
+            204
+        ]
+    }
+}

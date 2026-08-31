@@ -1,0 +1,13 @@
+{
+    "Update002BmcFirmwareUpdate": {
+        "TestName": "BMC 固件版本刷新功能测试",
+        "TestNum": "Redfish_UpdateService_002",
+        "LogBasename": "update_002_bmc_firmware_update",
+        "Protocol": "HTTP",
+        "ImageURI": "",
+        "DefaultImageURI": "",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

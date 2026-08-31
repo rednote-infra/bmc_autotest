@@ -1,0 +1,8 @@
+{
+  "Managers003EthernetInterfacesCheck": {
+    "TestName": "BMC网口信息检查",
+    "TestNum": "Redfish_Managers_003",
+    "LogBasename": "managers_003_ethernet_interfaces_check",
+    "TestTime": 60
+  }
+}

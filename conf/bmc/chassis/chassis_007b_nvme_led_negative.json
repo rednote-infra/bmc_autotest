@@ -1,0 +1,10 @@
+{
+    "ChassisNVMELEDNegativeCheck": {
+        "TestName": "NVMe指示灯操作测试（反向）",
+        "TestNum": "Redfish_Chassis_007b",
+        "LogBasename": "chassis_007b_nvme_led_negative",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

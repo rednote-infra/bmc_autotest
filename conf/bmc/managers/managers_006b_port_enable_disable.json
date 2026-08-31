@@ -1,0 +1,7 @@
+{
+    "Managers006bPortEnableDisable": {
+        "TestName": "BMC 端口使能/禁用功能测试",
+        "TestNum": "Redfish_Managers_006b",
+        "LogBasename": "managers_006b_port_enable_disable"
+    }
+}

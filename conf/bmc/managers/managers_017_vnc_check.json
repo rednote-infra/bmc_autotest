@@ -1,0 +1,7 @@
+{
+    "Managers017VncCheck": {
+        "TestName": "BMC VNC 服务配置检查",
+        "TestNum": "Redfish_Managers_017",
+        "LogBasename": "managers_017_vnc_check"
+    }
+}

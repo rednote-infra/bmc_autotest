@@ -1,0 +1,7 @@
+{
+  "Session002CreateTest": {
+    "TestName": "创建Session",
+    "TestNum": "Redfish_Session_002",
+    "LogBasename": "session_service_create_session"
+  }
+}

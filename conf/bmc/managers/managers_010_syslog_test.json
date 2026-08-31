@@ -1,0 +1,7 @@
+{
+    "Managers010SyslogTest": {
+        "TestName": "BMC Syslog 配置功能测试",
+        "TestNum": "Redfish_Managers_010",
+        "LogBasename": "managers_010_syslog_test"
+    }
+}

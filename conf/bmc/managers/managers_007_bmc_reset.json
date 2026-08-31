@@ -1,0 +1,7 @@
+{
+    "Managers007BmcReset": {
+        "TestName": "BMC 冷/热重启功能测试",
+        "TestNum": "Redfish_Managers_007",
+        "LogBasename": "managers_007_bmc_reset"
+    }
+}

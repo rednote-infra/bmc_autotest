@@ -1,0 +1,7 @@
+{
+    "Managers018FirewallCheck": {
+        "TestName": "BMC 防火墙规则配置检查",
+        "TestNum": "Redfish_Managers_018",
+        "LogBasename": "managers_018_firewall_check"
+    }
+}

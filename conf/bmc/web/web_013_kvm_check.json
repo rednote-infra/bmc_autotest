@@ -1,0 +1,21 @@
+{
+    "WebKvmCheck": {
+        "TestName": "BMC Web KVM服务检查",
+        "TestNum": "Web_013",
+        "LogBasename": "web_013_kvm_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSec": 10,
+        "KvmServiceUri": "/redfish/v1/Managers/1/KvmService",
+        "SystemsUri": "/redfish/v1/Systems/1",
+        "RequiredKvmFields": [
+            "MaximumNumberOfSessions"
+        ],
+        "MaxSessionsAliases": [
+            "MaximumNumberOfSessions",
+            "MaxSessions"
+        ],
+        "MinMaxSessions": 1
+    }
+}

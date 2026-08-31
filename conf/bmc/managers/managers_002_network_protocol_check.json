@@ -1,0 +1,8 @@
+{
+  "Managers002NetworkProtocolCheck": {
+    "TestName": "BMC网络协议信息检查",
+    "TestNum": "Redfish_Managers_002",
+    "LogBasename": "managers_002_network_protocol_check",
+    "TestTime": 60
+  }
+}

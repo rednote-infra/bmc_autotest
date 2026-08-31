@@ -1,0 +1,58 @@
+{
+    "IpmiFruInfo": {
+        "TestName": "IPMI带外FRU信息查看",
+        "TestNum": "IPMI_Fru_001",
+        "LogBasename": "ipmi_003_fru_info",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "IpmiInterface": "lanplus",
+        "QueryTimeoutSec": 30,
+        "RequiredFruGroups": {
+            "主板": {
+                "keywords": [
+                    "builtin fru device",
+                    "mb",
+                    "mainboard",
+                    "motherboard"
+                ],
+                "match_field": "description_or_product",
+                "description": "主板 FRU（Builtin FRU Device 或产品名含 MB）"
+            },
+            "硬盘背板": {
+                "keywords": [
+                    "bp",
+                    "backplane",
+                    "disk bp",
+                    "hdd bp",
+                    "nvme bp"
+                ],
+                "match_field": "description_or_product",
+                "description": "硬盘背板 FRU（产品名含 BP）"
+            },
+            "Riser卡": {
+                "keywords": [
+                    "riser",
+                    "mc",
+                    "mezzanine",
+                    "ocp"
+                ],
+                "match_field": "description_or_product",
+                "description": "Riser / OCP Mezzanine 卡 FRU（产品名含 Riser/MC/OCP）"
+            }
+        },
+        "RequiredFields": [
+            "Board Product",
+            "Board Mfg",
+            "Board Part Number"
+        ],
+        "OptionalFields": [
+            "Board Serial"
+        ],
+        "SkipRequiredFieldCheckKeywords": [
+            "psu",
+            "power supply",
+            "power_supply"
+        ]
+    }
+}

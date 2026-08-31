@@ -1,0 +1,10 @@
+{
+  "Managers021SolCheck": {
+    "TestName": "BMC SOL 串口源配置检查",
+    "TestNum": "Redfish_Managers_021",
+    "LogBasename": "managers_021_sol_check",
+    "BMC_IP": null,
+    "UserName": null,
+    "PassWord": null
+  }
+}

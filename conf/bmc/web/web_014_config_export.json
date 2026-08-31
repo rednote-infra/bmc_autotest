@@ -1,0 +1,14 @@
+{
+    "WebConfigExport": {
+        "TestName": "BMC Web配置导出",
+        "TestNum": "Web_014",
+        "LogBasename": "web_014_config_export",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSec": 30,
+        "BmcConfigUri": "/redfish/v1/Managers/1",
+        "BiosConfigUri": "/redfish/v1/Systems/1/Bios",
+        "ExportActionUri": "/redfish/v1/Managers/1/Actions/Manager.ExportSystemConfiguration"
+    }
+}

@@ -1,0 +1,7 @@
+{
+  "Session005DeleteTest": {
+    "TestName": "删除Session",
+    "TestNum": "Redfish_Session_005",
+    "LogBasename": "session_service_delete_session"
+  }
+}

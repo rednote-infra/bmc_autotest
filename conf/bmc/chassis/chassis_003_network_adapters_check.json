@@ -1,0 +1,10 @@
+{
+    "NetworkAdaptersInfoCheck": {
+        "TestName": "NetworkAdapters集合资源信息检查",
+        "TestNum": "Redfish_Chassis_003",
+        "LogBasename": "chassis_003_network_adapters_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}

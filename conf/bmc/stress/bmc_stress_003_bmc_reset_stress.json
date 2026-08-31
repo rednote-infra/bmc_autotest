@@ -1,0 +1,11 @@
+{
+  "BmcStress003BmcResetStress": {
+    "TestName": "BMC 冷/热重启稳定性压测（12h）",
+    "TestNum": "Redfish_BmcStress_003",
+    "LogBasename": "bmc_stress_003_bmc_reset_stress",
+    "DurationSeconds": 43200,
+    "BMC_IP": null,
+    "UserName": null,
+    "PassWord": null
+  }
+}

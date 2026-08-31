@@ -1,0 +1,7 @@
+{
+    "Managers022VncConfigTest": {
+        "TestName": "BMC VNC 服务配置读写测试",
+        "TestNum": "Redfish_Managers_022",
+        "LogBasename": "managers_022_vnc_config_test"
+    }
+}

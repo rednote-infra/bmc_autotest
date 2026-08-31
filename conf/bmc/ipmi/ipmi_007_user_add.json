@@ -1,0 +1,27 @@
+{
+    "IpmiUserAdd": {
+        "TestName": "IPMI带外增加用户（正向）",
+        "TestNum": "IPMI_User_002",
+        "LogBasename": "ipmi_007_user_add",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "IpmiInterface": "lanplus",
+        "QueryTimeoutSec": 30,
+        "QueryChannel": 1,
+        "TestUserId": 5,
+        "TestUserName": "ipmiaddtest",
+        "TestUserPassword": "Add@Test2024",
+        "TestUserPriv": 4,
+        "PrivLevelMap": {
+            "1": "CALLBACK",
+            "2": "USER",
+            "3": "OPERATOR",
+            "4": "ADMINISTRATOR",
+            "15": "NO ACCESS"
+        },
+        "WaitAfterOpSec": 2,
+        "CleanupPriv": 15,
+        "CleanupName": "unused_5"
+    }
+}

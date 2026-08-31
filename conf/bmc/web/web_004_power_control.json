@@ -1,0 +1,22 @@
+{
+    "WebPowerControl": {
+        "TestName": "BMC Web电源状态控制",
+        "TestNum": "Web_004",
+        "LogBasename": "web_004_power_control",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": "",
+        "TimeoutSec": 10,
+        "PowerStateUri": "/redfish/v1/Systems/1",
+        "PowerActionUri": "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+        "AllowableResetTypes": [
+            "On",
+            "ForceOff",
+            "GracefulShutdown",
+            "ForceRestart",
+            "ForcePowerCycle",
+            "PowerCycle"
+        ],
+        "QueryOnly": true
+    }
+}

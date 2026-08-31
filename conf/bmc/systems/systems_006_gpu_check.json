@@ -1,0 +1,10 @@
+{
+    "GpuInfoCheck": {
+        "TestName": "GPU集合资源信息检查",
+        "TestNum": "Redfish_Systems_006",
+        "LogBasename": "systems_006_gpu_check",
+        "BMC_IP": "",
+        "UserName": "",
+        "PassWord": ""
+    }
+}
