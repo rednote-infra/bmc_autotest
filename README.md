@@ -20,15 +20,121 @@ _**BMC功能测试脚本**_
 
 ## **使用方法**
 
+### 环境准备
+
+#### 1. 检查 / 安装 Python 3.9+
+
+本项目要求 **Python >= 3.9**（见 [`requirements.txt`](requirements.txt)），执行前先确认本机版本：
+
+```bash
+python3 --version
+# 期望输出类似：Python 3.9.x / 3.10.x / 3.11.x ...
+```
+
+若版本低于 3.9，需先安装：
+
+- **macOS**（推荐使用 Homebrew）：
+  ```bash
+  brew install python@3.9
+  # 安装后可通过完整路径调用，避免与系统默认 python3 冲突
+  /opt/homebrew/bin/python3.9 --version
+  ```
+- **Linux（Ubuntu/Debian）**：
+  ```bash
+  sudo apt-get update
+  sudo apt-get install -y python3.9 python3.9-venv
+  ```
+- **Linux（CentOS/RHEL 8 及以上，或 CentOS Stream）**：官方 AppStream 仓库已内置 3.9：
+  ```bash
+  sudo dnf install -y python39 python39-devel
+  # 验证
+  python3.9 --version
+  ```
+- **Linux（CentOS 7）**：默认仓库最高只提供 Python 3.6，需借助第三方仓库（如 IUS）安装 3.9：
+  ```bash
+  sudo yum install -y https://repo.ius.io/ius-release-el7.rpm
+  sudo yum install -y python39u python39u-pip python39u-devel
+  # IUS 安装的可执行文件名为 python3.9
+  python3.9 --version
+  ```
+  > 若无法访问 IUS 仓库，也可选择从源码编译安装 Python 3.9（需先安装 `gcc`、`openssl-devel`、`bzip2-devel`、`libffi-devel` 等编译依赖）。
+- **Windows**：从 [python.org](https://www.python.org/downloads/) 下载 3.9+ 安装包，安装时勾选 "Add python.exe to PATH"。
+
+#### 2. 创建 Python 3.9 虚拟环境
+
+在**项目根目录**下创建独立虚拟环境（推荐命名为 `venv`），避免污染系统 Python 环境、也避免和其他项目的依赖版本冲突：
+
+```bash
+cd /path/to/bmc_autotest
+
+# 若系统装有多个 Python 版本，显式指定 3.9 解释器创建虚拟环境
+python3.9 -m venv venv
+
+# 若系统默认 python3 本身就是 3.9+，也可以直接：
+# python3 -m venv venv
+```
+
+执行成功后，项目根目录下会新增一个 `venv/` 目录，其中包含独立的 Python 解释器、`pip` 及后续安装的第三方库，与系统 Python 完全隔离。
+
+#### 3. 激活虚拟环境
+
+不同操作系统/终端的激活命令不同：
+
+| 系统 / 终端 | 激活命令 |
+|:---|:---|
+| macOS / Linux（bash、zsh） | `source venv/bin/activate` |
+| Windows PowerShell | `venv\Scripts\Activate.ps1` |
+| Windows cmd | `venv\Scripts\activate.bat` |
+
+以 macOS/Linux 为例：
+
+```bash
+cd /path/to/bmc_autotest
+source venv/bin/activate
+```
+
+激活成功后，终端提示符前会出现 `(venv)` 前缀，例如：
+
+```
+(venv) user@host bmc_autotest %
+```
+
+这表示当前 shell 已切换到虚拟环境，此后执行的 `python3` / `pip` 命令都指向 `venv/` 内部的解释器，不会影响系统全局环境。
+
+> **注意**：虚拟环境的激活状态只在当前终端会话内生效。每次打开新的终端窗口/新开一个 SSH 会话执行本项目脚本前，都需要重新 `cd` 到项目根目录并执行 `source venv/bin/activate`。
+
+不再需要虚拟环境时，执行以下命令退出：
+
+```bash
+deactivate
+```
+
+#### 4. 安装项目依赖
+
+激活虚拟环境后（提示符出现 `(venv)`），安装 [`requirements.txt`](requirements.txt) 中声明的全部依赖：
+
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+安装完成后可简单验证：
+
+```bash
+python3 -c "import redfish_sdk; print('redfish_sdk OK:', redfish_sdk.__version__)"
+```
+
+若无报错并打印出版本号，说明依赖安装成功，可以开始执行测试脚本。
+
+---
+
+### 执行单条测试脚本
+
 所有 `bmc/` 下的脚本支持两种执行方式，**推荐使用方式二**。
 
-> 前提：在项目根目录下激活虚拟环境
-> ```bash
-> cd /tmp/bmc_autotest
-> source venv/bin/activate
-> ```
+> 前提：已按上文完成虚拟环境创建与激活。
 
-### 方式一：直接执行脚本文件
+#### 方式一：直接执行脚本文件
 
 ```bash
 python3 bmc/<脚本名>.py -i <BMC_IP> -u <用户名> -p <密码>
@@ -37,7 +143,7 @@ python3 bmc/<脚本名>.py -i <BMC_IP> -u <用户名> -p <密码>
 python3 bmc/chassis_001_drives_check.py -i <bmc_ip> -u <username> -p <password>
 ```
 
-### 方式二：以模块方式执行（推荐）
+#### 方式二：以模块方式执行（推荐）
 
 ```bash
 python3 -m bmc.<脚本名> -i <BMC_IP> -u <用户名> -p <密码>
@@ -49,7 +155,7 @@ python3 -m bmc.systems_001_processors_check -i <bmc_ip> -u <username> -p <passwo
 
 模块方式无需关心当前工作目录，只要在项目根目录下即可。
 
-### 通用参数说明
+#### 通用参数说明
 
 | 参数            |  简写  | 说明        | 示例              |
 |:--------------|:----:|:----------|:----------------|
@@ -61,6 +167,66 @@ python3 -m bmc.systems_001_processors_check -i <bmc_ip> -u <username> -p <passwo
 ```bash
 python3 -m bmc.<脚本名> --help
 ```
+
+---
+
+### 使用 bmc_runner 一键批量执行测试（推荐）
+
+单条脚本调试完成后，日常回归/验收测试推荐使用 [`bmc/bmc_runner.py`](bmc/bmc_runner.py) 一键批量执行——它会按 suite 分组自动串行跑完所有脚本，实时采集日志，并生成 Markdown / HTML / Excel 三种格式的可视化测试报告。
+
+#### 基本用法
+
+```bash
+# 跑全部 suite（chassis / systems / managers / account / session /
+# update / protocol / ipmi / web / event / stress）
+python3 -m bmc.bmc_runner -i <bmc_ip> -u <username> -p <password>
+```
+
+#### 常用参数
+
+| 参数 | 说明 | 示例 |
+|:---|:---|:---|
+| `-i` / `--bmc_ip` | BMC IP 地址（必填） | `-i 10.0.0.1` |
+| `-u` / `--user_name` | BMC 用户名（必填） | `-u admin` |
+| `-p` / `--password` | BMC 密码（必填） | `-p Passw0rd` |
+| `--suite` | 指定要执行的分组，逗号分隔；不指定则默认执行除 `stress` 外的全部分组 | `--suite chassis,ipmi` |
+| `--only` | 只跑某一个脚本（调试用），自动推断其所属 suite | `--only chassis_001_drives_check` |
+| `--nostress` | 屏蔽 stress 压测类脚本（压测默认耗时 12h，日常验证建议加此参数） | `--nostress` |
+
+支持的 suite 分组（见 [`conf/bmc/bmc_runner_suites.json`](conf/bmc/bmc_runner_suites.json)）：
+`chassis` / `systems` / `managers` / `account` / `session` / `update` / `protocol` / `ipmi` / `web` / `event` / `stress`
+
+#### 使用示例
+
+```bash
+# 1. 跑全部分组（含压测，耗时较长，建议 nohup 放后台执行）
+nohup python3 -m bmc.bmc_runner -i <bmc_ip> -u <username> -p <password> > runner_nohup.log 2>&1 &
+
+# 2. 日常回归：跑全部分组但屏蔽压测
+python3 -m bmc.bmc_runner -i <bmc_ip> -u <username> -p <password> --nostress
+
+# 3. 只跑 chassis 和 ipmi 两个分组
+python3 -m bmc.bmc_runner -i <bmc_ip> -u <username> -p <password> --suite chassis,ipmi
+
+# 4. 只调试单个脚本
+python3 -m bmc.bmc_runner -i <bmc_ip> -u <username> -p <password> --only chassis_001_drives_check
+```
+
+#### 输出产物
+
+每次执行都会在 `result/bmc/bmc_runner_<时间戳>/` 目录下生成：
+
+| 文件 | 说明 |
+|:---|:---|
+| `runner.log` | 全量执行日志（含每条脚本的 stdout/stderr，带起止边界标记） |
+| `report.md` | Markdown 格式测试报告（分组汇总 + WARNING/FAIL 详情 + 完整结果表） |
+| `report.html` | HTML 格式测试报告（含配色统计卡片，适合浏览器直接打开查看） |
+| `report.xlsx` | Excel 格式测试报告（汇总 / 测试结果 / WARNING项 / FAIL详情 共 4 个 Sheet；若未安装 `openpyxl` 会自动降级为同名 `.csv`） |
+| `summary.json` | 结构化 JSON 汇总结果，便于二次处理或 CI 集成 |
+
+执行结束后终端会打印各产物的完整路径。整体退出码：全部 PASS 且无 ERROR/TIMEOUT 时为 `0`，否则为 `2`，可直接用于 CI 流水线的成败判定。
+
+---
 
 ### 故障定位（HTTP DEBUG 日志）
 
