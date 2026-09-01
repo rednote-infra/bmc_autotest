@@ -11,3 +11,4 @@ venv/
 .env
 .codewiz/
 .idea/
+.plans/
