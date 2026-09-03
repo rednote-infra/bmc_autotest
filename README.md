@@ -16,6 +16,7 @@ _**BMC功能测试脚本**_
 - [AccountService资源](#accountservice资源)
 - [Managers资源](#managers资源)
 - [SDK已知局限（get_raw临时占位）](#sdk已知局限get_raw临时占位)
+- [许可证](#许可证)
 
 
 ## **使用方法**
@@ -536,3 +537,7 @@ Web 脚本通过 Redfish Session（X-Auth-Token）模拟 Web 浏览器行为，�
 | `managers/managers_026_default_config_check.py` | OEM.Public.PowerOnDelayEnabled / pydantic bug / Redundancy.mode 等 | 默认配置合规检查，场景独立 |
 
 > 识别方式：运行时日志中搜索 `[SDK-GAP]` 关键字即可定位所有临时占位点。
+
+## **许可证**
+
+本项目采用 [BSD 3-Clause License](LICENSE)。
