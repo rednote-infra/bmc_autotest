@@ -3,13 +3,29 @@
         "TestName": "BIOS 固件版本刷新功能测试",
         "TestNum": "Redfish_UpdateService_003",
         "LogBasename": "update_003_bios_firmware_update",
-        "Protocol": "HTTP",
-        "BiosFlash": "Both",
-        "ImageURI": "",
-        "DefaultImageURI": "",
         "BMC_IP": "",
         "UserName": "",
         "PassWord": "",
-        "ServerIP": ""
+        "ServerIP": "",
+        "Vendor": "",
+        "default": {
+            "Protocol": "HTTP",
+            "BiosFlash": "Both",
+            "ImageURI": "",
+	        "DefaultImageURI": ""
+        },
+        "vendors": {
+            "enginetech": {
+                "ImageURI": "http://ip/update.bin",
+                "DefaultImageURI": "http://ip/origin.bin",
+                "Targets": ["/redfish/v1/UpdateService/FirmwareInventory/BIOS"],
+                "ImageUser": "xx",
+                "ImagePass": "xx",
+                "Protocol": "HTTP",
+                "PowerOffBeforeUpgrade": true,
+                "PowerOffWaitSec": 20,
+                "PreserveConf": true
+            }
+        }
     }
 }

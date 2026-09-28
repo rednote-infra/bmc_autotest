@@ -60,6 +60,19 @@ from func.bmc_test_base import BmcTestBase
 
 from redfish_sdk import RedfishClient, RedfishException
 from redfish_sdk.exceptions import RedfishTimeoutError
+from redfish_sdk.managers.update_strategies import VendorDetector
+
+# ── 跨平台命令（Windows 下 ping 参数不同）───────────────────────────────────
+def _is_windows() -> bool:
+    return sys.platform.startswith("win")
+
+
+def _ping_cmd(host: str) -> list:
+    """构建单次 ping 命令：Windows 用 -n/-w(ms)，Linux 用 -c/-W(s)。"""
+    if _is_windows():
+        return ["ping", "-n", "1", "-w", "2000", host]
+    return ["ping", "-c", "1", "-W", "2", host]
+
 
 # ── 超时 / 轮询常量 ──────────────────────────────────────────────────────────
 TASK_TIMEOUT_SEC     = 1800   # wait_for_task() 超时（30min，固件刷写场景）
@@ -96,7 +109,14 @@ class Update003BiosFirmwareUpdate(BmcTestBase):
         self.DEFAULT_IMAGE_URI = None
         self.PROTOCOL          = None
         self.BIOS_FLASH        = None
+        self.IMAGE_USER        = None
+        self.IMAGE_PASS        = None
+        self.TARGETS           = None
         self.SERVER_IP         = ""
+        self.VENDOR            = None
+        self.POWER_OFF_BEFORE  = None   # 是否下电升级（由 json PowerOffBeforeUpgrade 决定）
+        self.POWER_OFF_WAIT    = 20     # 下电后等待秒数（由 json PowerOffWaitSec 决定）
+        self.PRESERVE_CONF      = None   # 是否保留 BIOS 配置（由 json PreserveConf 决定）
         super().__init__(
             case=case,
             config_path=os.path.join(os.getcwd(), "conf/bmc/update/update_003_bios_firmware_update.json"),
@@ -118,6 +138,17 @@ class Update003BiosFirmwareUpdate(BmcTestBase):
                             help="传输协议（HTTP/HTTPS/SFTP/NFS/SCP），默认取配置文件值")
         parser.add_argument("--bios-flash",              type=str, default=None,
                             dest="bios_flash",           help="BIOS Flash 目标（Flash1/Flash2/Both），默认取配置文件值")
+        parser.add_argument("--image-user",              type=str, default=None,
+                            dest="image_user",           help="文件服务器(镜像源)用户名，写入 SimpleUpdate 根级 Username")
+        parser.add_argument("--image-pass",              type=str, default=None,
+                            dest="image_pass",           help="文件服务器(镜像源)密码，写入 SimpleUpdate 根级 Password")
+        parser.add_argument("--targets",                 type=str, default=None,
+                            dest="targets",              help="固件目标 Targets（逗号分隔，如 '/redfish/v1/UpdateService/FirmwareInventory/BIOS'）；enginetech(安擎) 必须显式指定，禁止自动推导")
+        parser.add_argument("--vendor",                  type=str, default=None,
+                            dest="vendor",               help="厂商名称（enginetech/inspur/zte/...）；用于选择 json 中对应厂商配置段，未下发其它参数时从该段获取；缺省自动探测")
+        parser.add_argument("--preserve-conf",            action="store_const", const=True,
+                            default=None, dest="preserve_conf",
+                            help="保留 BIOS 配置升级（true）；不传则由 json PreserveConf 决定")
         args, _ = parser.parse_known_args()
         self.BMC_IP            = args.bmc_ip
         self.USERNAME          = args.user_name
@@ -126,19 +157,73 @@ class Update003BiosFirmwareUpdate(BmcTestBase):
         self.DEFAULT_IMAGE_URI = args.default_image_uri
         self.PROTOCOL          = args.protocol
         self.BIOS_FLASH        = args.bios_flash
+        self.IMAGE_USER        = args.image_user
+        self.IMAGE_PASS        = args.image_pass
+        self.TARGETS           = args.targets
+        self.VENDOR            = args.vendor
+        self.PRESERVE_CONF     = args.preserve_conf
 
     # ── 额外配置（从 JSON 补填命令行未指定的参数）───────────────────────────
 
     def _load_extra_config(self, conf_section: dict) -> None:
-        self.SERVER_IP = conf_section.get("ServerIP", "")
-        if self.IMAGE_URI         is None:
-            self.IMAGE_URI         = conf_section.get("ImageURI") or None
-        if self.DEFAULT_IMAGE_URI is None:
-            self.DEFAULT_IMAGE_URI = conf_section.get("DefaultImageURI") or None
-        if not self.PROTOCOL:
-            self.PROTOCOL          = conf_section.get("Protocol", "HTTP")
-        if not self.BIOS_FLASH:
-            self.BIOS_FLASH        = conf_section.get("BiosFlash", "Both")
+        # 仅暂存原始配置；厂商相关参数延迟到 run_test（client 就绪后）
+        # 通过 _resolve_vendor_config() 动态探测并应用 vendors[厂商] 段
+        self._conf_section = conf_section
+
+    # ── 额外配置（client 就绪后，动态解析厂商并应用配置段）──────────────────
+
+    def _resolve_vendor_config(self, test: CommonFunction) -> None:
+        """
+        在 client 已建立后解析厂商并应用配置段：
+          - 厂商优先级：CLI --vendor > json 顶层 Vendor > SDK 动态探测
+          - 动态探测与 CLI/json 均未得到有效厂商 → 抛出 ValueError 终止
+        """
+        conf_section = getattr(self, "_conf_section", None) or {}
+        # 厂商：CLI 优先，其次 json 顶层 Vendor，最后动态探测
+        vendor = self.VENDOR or conf_section.get("Vendor") or ""
+        if not vendor:
+            detected = None
+            try:
+                detected = VendorDetector.detect(self.client)
+            except Exception as e:
+                test.print_log("WARNING", f"厂商动态探测异常：{e}")
+            if detected and detected != "generic":
+                vendor = detected
+                test.print_log("INFO", f"动态探测到厂商：{vendor}")
+            else:
+                raise ValueError(
+                    "未指定且无法探测到有效厂商（Vendor）：请通过 --vendor 指定"
+                    "（如 enginetech/inspur/zte），或确认 BMC 可被 VendorDetector 识别"
+                    f"（探测结果：{detected}）。程序终止。"
+                )
+        # 按厂商取对应配置段；指定厂商无对应段时回退到 default 段 / 顶层
+        vcfg = (conf_section.get("vendors") or {}).get(vendor, {}) if vendor else {}
+        dcfg = conf_section.get("default") or {}
+
+        def pick(attr: str, key: str, default=None):
+            """参数取值优先级：CLI(self) > 厂商段 > default段 > 顶层 > default"""
+            val = getattr(self, attr, None)
+            if val in (None, ""):
+                val = vcfg.get(key)
+            if val in (None, ""):
+                val = dcfg.get(key)
+            if val in (None, ""):
+                val = conf_section.get(key)
+            return val if val is not None else default
+
+        self.SERVER_IP         = pick("SERVER_IP", "ServerIP", "")
+        self.IMAGE_URI         = pick("IMAGE_URI", "ImageURI")
+        self.DEFAULT_IMAGE_URI = pick("DEFAULT_IMAGE_URI", "DefaultImageURI")
+        self.PROTOCOL          = pick("PROTOCOL", "Protocol", "HTTP")
+        self.BIOS_FLASH        = pick("BIOS_FLASH", "BiosFlash", "Both")
+        self.IMAGE_USER        = pick("IMAGE_USER", "ImageUser")
+        self.IMAGE_PASS        = pick("IMAGE_PASS", "ImagePass")
+        self.TARGETS           = pick("TARGETS", "Targets")
+        self.POWER_OFF_BEFORE  = bool(pick("POWER_OFF_BEFORE", "PowerOffBeforeUpgrade", False))
+        self.POWER_OFF_WAIT    = pick("POWER_OFF_WAIT", "PowerOffWaitSec", 20) or 20
+        self.PRESERVE_CONF      = bool(pick("PRESERVE_CONF", "PreserveConf", False))
+        if not self.VENDOR:
+            self.VENDOR         = vendor or None
 
     # ── 辅助：获取当前 BIOS 版本 ─────────────────────────────────────────────
 
@@ -173,17 +258,70 @@ class Update003BiosFirmwareUpdate(BmcTestBase):
             f"[{label}] 服务器关机超时（>{SHUTDOWN_TIMEOUT_SEC}s）")
         return False
 
+    # ── 辅助：确保服务器已下电（先判断 + 必要时 ForceOff + 轮询等 Off）────────
+
+    def _ensure_power_off(self, test: CommonFunction, label: str, wait_sec: int) -> bool:
+        """
+        针对需下电升级的厂商：确保服务器进入 AC 断电(Off)状态。
+
+        流程：
+          1. 先查询当前 PowerState，已是 Off 直接返回 True（避免重复下电）
+          2. 否则发送 ForceOff（AC 断电）
+          3. 在 wait_sec 内循环轮询 PowerState，变为 Off 即提前退出等待
+          4. 超时仍未 Off → 记录 ERROR 并返回 False
+
+        返回 True 表示服务器已处于 Off，可继续刷写；False 表示下电失败。
+        """
+        # 1. 先判断是否已下电
+        try:
+            cur_state = self.client.get_system().power_state or ""
+        except Exception as e:
+            test.print_log("WARNING", f"[{label}] 查询当前 PowerState 异常：{e}")
+            cur_state = ""
+        if cur_state == "Off":
+            test.print_log("INFO", f"[{label}] 服务器已处于 Off 状态，无需重复下电")
+            return True
+
+        # 2. 未下电 → 发送 ForceOff
+        test.print_log("INFO", f"[{label}] 执行下电动作（ForceOff）...")
+        try:
+            self.client.post(RESET_URI, {"ResetType": "ForceOff"})
+        except RedfishException as e:
+            # 已处于 Off 状态时可能返回错误，非致命
+            test.print_log("WARNING", f"[{label}] 下电响应异常（可能已断电）：{e}")
+
+        # 3. 在 wait_sec 内循环轮询 PowerState，变为 Off 提前退出
+        test.print_log("INFO", f"[{label}] 等待下电完成（超时 {wait_sec}s）...")
+        deadline = time.time() + wait_sec
+        while time.time() < deadline:
+            try:
+                state = self.client.get_system().power_state or ""
+                test.print_log("INFO", f"[{label}] PowerState={state}")
+                if state == "Off":
+                    test.print_log("INFO",
+                        f"[{label}] 服务器已下电（PowerState=Off），提前退出等待")
+                    return True
+            except Exception as e:
+                test.print_log("WARNING", f"[{label}] 查询 PowerState 异常：{e}")
+            time.sleep(POLL_INTERVAL_SEC)
+
+        # 4. 超时仍未下电
+        test.print_log("ERROR",
+            f"[{label}] 下电超时（>{wait_sec}s）服务器仍未进入 Off 状态，"
+            f"请检查 BMC 状态或供电链路")
+        return False
+
     # ── 辅助：等待服务器上电后 ping 通带内 IP ────────────────────────────────
 
     def _wait_poweron_ping(self, test: CommonFunction, label: str) -> bool:
         """
         ping SERVER_IP 直到通或超时。
-        SERVER_IP 未配置则等待 120s 后直接返回 True（跳过 OS 启动确认）。
+        SERVER_IP 未配置则等待 600s 后直接返回 True（跳过 OS 启动确认）。
         """
         if not self.SERVER_IP:
             test.print_log("WARNING",
-                f"[{label}] 未配置 ServerIP，跳过 OS 启动 ping 检测，等待 120s 后继续")
-            time.sleep(120)
+                f"[{label}] 未配置 ServerIP，跳过 OS 启动 ping 检测，等待 600S 后继续")
+            time.sleep(600)
             return True
         test.print_log("INFO",
             f"[{label}] 等待服务器 OS 启动（ping {self.SERVER_IP}，超时 {POWERON_TIMEOUT_SEC}s）...")
@@ -191,7 +329,7 @@ class Update003BiosFirmwareUpdate(BmcTestBase):
         while time.time() < deadline:
             try:
                 r = subprocess.run(
-                    ["ping", "-c", "1", "-W", "2", self.SERVER_IP],
+                    _ping_cmd(self.SERVER_IP),
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
                 if r.returncode == 0:
@@ -222,17 +360,49 @@ class Update003BiosFirmwareUpdate(BmcTestBase):
         phase: dict[str, Any]          = {"phase_label": phase_label, "image_uri": image_uri}
         checks: list[tuple[str, bool]] = []
 
-        # ── 步骤1：simple_update() ──────────────────────────────────────────
+        # ── 步骤1：simple_update()（按厂商路由，不写死策略）──────────────────
+        # 解析实际厂商：显式指定优先，否则交由 SDK 自动探测
+        resolved_vendor = self.VENDOR or VendorDetector.detect(self.client)
+        # enginetech(安擎) 必须显式指定 Targets（策略内部已禁止自动推导，未传会直接报错）；
+        # 其它厂商沿用既有 SIMPLE_UPDATE_TARGETS（/redfish/v1/Systems/1）
         su_kwargs: dict[str, Any] = {
             "image_uri":         image_uri,
             "transfer_protocol": self.PROTOCOL,
-            "targets":           SIMPLE_UPDATE_TARGETS,
-            "flash_item":        "BIOS",
-            "bios_flash":        self.BIOS_FLASH,
+            "vendor":            self.VENDOR,   # None → SDK 自动探测
+            "image_type":        "BIOS",         # enginetech(安擎): Oem.Public.ImageType
+            "flash_item":        "BIOS",         # inspur 等: Oem.Public.FlashItem
+            "bios_flash":        self.BIOS_FLASH,  # zte 等: Oem.Public.BiosFlash
+            "preserve_config":   self.PRESERVE_CONF,  # enginetech(安擎): Oem.Public.PreserveConf
         }
+        # 文件服务器(镜像源)凭据 → enginetech(安擎): 根级 Username/Password（供 BMC 拉取镜像鉴权）
+        if self.IMAGE_USER:
+            su_kwargs["username"] = self.IMAGE_USER
+        if self.IMAGE_PASS:
+            su_kwargs["password"] = self.IMAGE_PASS
+        if resolved_vendor != "enginetech":
+            su_kwargs["targets"] = SIMPLE_UPDATE_TARGETS
+        # 显式 Targets（覆盖 SDK 默认）；enginetech(安擎) 场景下若不指定会触发策略报错，必须配置
+        if self.TARGETS:
+            su_kwargs["targets"] = (
+                [t.strip() for t in self.TARGETS.split(",") if t.strip()]
+                if isinstance(self.TARGETS, str) else list(self.TARGETS)
+            )
+        # ── 前置：按需下电（个别厂商 BIOS 需断电升级）─────────────────────────
+        if self.POWER_OFF_BEFORE:
+            power_off_ok = self._ensure_power_off(
+                test, phase_label, self.POWER_OFF_WAIT)
+            if not power_off_ok:
+                test.print_log("ERROR",
+                    f"[{phase_label}] 下电失败，无法继续 BIOS 升级")
+                checks.append(("下电升级（服务器进入 Off 状态）", False))
+                phase["checks"]       = _to_check_list(checks)
+                phase["phase_result"] = "FAIL"
+                return phase
+            checks.append(("下电升级（服务器进入 Off 状态）", True))
+
         test.print_log("INFO",
-            f"[{phase_label}] SDK simple_update — flash_item=BIOS, "
-            f"bios_flash={self.BIOS_FLASH}, protocol={self.PROTOCOL}, image_uri={image_uri}")
+            f"[{phase_label}] SDK simple_update — vendor={resolved_vendor}, "
+            f"image_type=BIOS, protocol={self.PROTOCOL}, image_uri={image_uri}")
         try:
             resp = self.client.simple_update(**su_kwargs)
             test.print_log("INFO", f"[{phase_label}] SimpleUpdate 响应：{resp}")
@@ -368,6 +538,10 @@ class Update003BiosFirmwareUpdate(BmcTestBase):
             host=self.BMC_IP,
             username=self.USERNAME,
             password=self.PASSWORD,
+            connect_timeout=15,
+            read_timeout=20,
+            retry_on_read_timeout=True,
+            retry_5xx=1,
         )
         version_after = self._get_bios_version(test)
         test.print_log("INFO", f"[{phase_label}] 刷新后 BIOS 版本：{version_after}")
@@ -384,12 +558,7 @@ class Update003BiosFirmwareUpdate(BmcTestBase):
         test.print_log("INFO", f"测试用例名称：{self.TEST_NAME}，编号：{self.TEST_NUM}")
         test.print_log("INFO", "测试开始")
 
-        if not self.IMAGE_URI:
-            test.print_log("ERROR",
-                "未指定 --image-uri（新版本 BIOS 镜像 URI），无法执行固件刷新，直接 FAIL")
-            self.command_check_result = "FAIL"
-            self._write_results({}, "FAIL", "SKIP", "Unknown")
-            return
+
 
         detail         = {}
         phase_a_result = "FAIL"
@@ -401,7 +570,20 @@ class Update003BiosFirmwareUpdate(BmcTestBase):
                 host=self.BMC_IP,
                 username=self.USERNAME,
                 password=self.PASSWORD,
+                connect_timeout=15,
+                read_timeout=20,
+                retry_on_read_timeout=True,
+                retry_5xx=1,
             )
+            # ── 动态解析厂商并应用配置段（client 已就绪，可动态探测）────────
+            self._resolve_vendor_config(test)
+
+            if not self.IMAGE_URI:
+                test.print_log("ERROR",
+                    "未指定 --image-uri（新版本 BIOS 镜像 URI），无法执行固件刷新，直接 FAIL")
+                self.command_check_result = "FAIL"
+                self._write_results({}, "FAIL", "SKIP", "Unknown")
+                return
 
             # ── 记录刷新前版本 ────────────────────────────────────────────
             version_before = self._get_bios_version(test)
@@ -469,6 +651,8 @@ class Update003BiosFirmwareUpdate(BmcTestBase):
                     test.print_log("ERROR",
                         "阶段B FAIL（BIOS 固件未恢复至默认版本，需人工介入！）")
 
+        except ValueError as e:
+            test.print_log("ERROR", str(e))
         except Exception as e:
             test.print_log("ERROR", f"未处理异常：{e}")
             traceback.print_exc()
@@ -555,6 +739,10 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         CommonFunction.print_log("ERROR", "检测到键盘中断，提前终止")
         exit_code = 130
+    except ValueError as e:
+        # 配置类错误（如未指定厂商），仅输出清晰提示，不打 traceback
+        CommonFunction.print_log("ERROR", str(e))
+        exit_code = 2
     except Exception as e:
         CommonFunction.print_log("ERROR", f"发生未处理异常：{e}")
         traceback.print_exc()

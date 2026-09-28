@@ -55,7 +55,22 @@ from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
 
 from redfish_sdk import RedfishClient, RedfishException
-from redfish_sdk.exceptions import RedfishTimeoutError
+from redfish_sdk.exceptions import RedfishConnectionError, RedfishTimeoutError
+from redfish_sdk.managers.update_strategies import VendorDetector
+
+# ── 跨平台命令（Windows 下 ping/ipmitool 参数与可执行名不同）──────────────
+def _is_windows() -> bool:
+    return sys.platform.startswith("win")
+
+
+def _ping_cmd(host: str) -> list:
+    """构建单次 ping 命令：Windows 用 -n/-w(ms)，Linux 用 -c/-W(s)。"""
+    if _is_windows():
+        return ["ping", "-n", "1", "-w", "2000", host]
+    return ["ping", "-c", "1", "-W", "2", host]
+
+
+IPMITOOL_BIN = "ipmitool.exe" if _is_windows() else "ipmitool"
 
 # ── 超时 / 轮询常量 ──────────────────────────────────────────────────────────
 TASK_TIMEOUT_SEC    = 1800   # wait_for_task() 超时（30min，固件刷写场景）
@@ -90,7 +105,11 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
         self.IMAGE_URI         = None
         self.DEFAULT_IMAGE_URI = None
         self.PROTOCOL          = None
-        self.PRESERVE_CONF     = False
+        self.PRESERVE_CONF     = None   # 是否保留 BMC 配置（json PreserveConf 决定，CLI --preserve-conf 覆盖）
+        self.IMAGE_USER        = None
+        self.IMAGE_PASS        = None
+        self.TARGETS           = None
+        self.VENDOR            = None
         super().__init__(
             case=case,
             config_path=os.path.join(os.getcwd(), "conf/bmc/update/update_002_bmc_firmware_update.json"),
@@ -110,8 +129,17 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
                             dest="default_image_uri",    help="默认版本固件镜像 URI（用于阶段B回刷）")
         parser.add_argument("--protocol",                type=str, default=None,
                             help="传输协议（HTTP/HTTPS/SFTP/NFS/SCP），默认取配置文件值")
-        parser.add_argument("--preserve-conf",           action="store_true", default=False,
-                            dest="preserve_conf",        help="刷写时保留配置（PreserveConf）")
+        parser.add_argument("--preserve-conf",            action="store_const", const=True,
+                            default=None, dest="preserve_conf",
+                            help="保留 BMC 配置升级（true）；不传则由 json PreserveConf 决定")
+        parser.add_argument("--image-user",              type=str, default=None,
+                            dest="image_user",           help="文件服务器(镜像源)用户名，写入 SimpleUpdate 根级 Username")
+        parser.add_argument("--image-pass",              type=str, default=None,
+                            dest="image_pass",           help="文件服务器(镜像源)密码，写入 SimpleUpdate 根级 Password")
+        parser.add_argument("--targets",                 type=str, default=None,
+                            dest="targets",              help="固件目标 Targets（逗号分隔，如 '/redfish/v1/UpdateService/FirmwareInventory/BMCImage1'）；enginetech(安擎) 必须显式指定，禁止自动推导")
+        parser.add_argument("--vendor",                  type=str, default=None,
+                            dest="vendor",               help="厂商策略（enginetech/inspur/zte/...），默认自动探测")
         args, _ = parser.parse_known_args()
         self.BMC_IP            = args.bmc_ip
         self.USERNAME          = args.user_name
@@ -120,16 +148,68 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
         self.DEFAULT_IMAGE_URI = args.default_image_uri
         self.PROTOCOL          = args.protocol
         self.PRESERVE_CONF     = args.preserve_conf
+        self.IMAGE_USER        = args.image_user
+        self.IMAGE_PASS        = args.image_pass
+        self.TARGETS           = args.targets
+        self.VENDOR            = args.vendor
 
     # ── 额外配置（从 JSON 补填命令行未指定的参数）───────────────────────────
 
     def _load_extra_config(self, conf_section: dict) -> None:
-        if self.IMAGE_URI         is None:
-            self.IMAGE_URI         = conf_section.get("ImageURI") or None
-        if self.DEFAULT_IMAGE_URI is None:
-            self.DEFAULT_IMAGE_URI = conf_section.get("DefaultImageURI") or None
-        if not self.PROTOCOL:
-            self.PROTOCOL          = conf_section.get("Protocol", "HTTP")
+        # 仅暂存原始配置；厂商相关参数延迟到 run_test（client 就绪后）
+        # 通过 _resolve_vendor_config() 动态探测并应用 vendors[厂商] 段
+        self._conf_section = conf_section
+
+    # ── 额外配置（client 就绪后，动态解析厂商并应用配置段）──────────────────
+
+    def _resolve_vendor_config(self, test: CommonFunction) -> None:
+        """
+        在 client 已建立后解析厂商并应用配置段：
+          - 厂商优先级：CLI --vendor > json 顶层 Vendor > SDK 动态探测
+          - 动态探测与 CLI/json 均未得到有效厂商 → 抛出 ValueError 终止
+        """
+        conf_section = getattr(self, "_conf_section", None) or {}
+        # 厂商：CLI 优先，其次 json 顶层 Vendor，最后动态探测
+        vendor = self.VENDOR or conf_section.get("Vendor") or ""
+        if not vendor:
+            detected = None
+            try:
+                detected = VendorDetector.detect(self.client)
+            except Exception as e:
+                test.print_log("WARNING", f"厂商动态探测异常：{e}")
+            if detected and detected != "generic":
+                vendor = detected
+                test.print_log("INFO", f"动态探测到厂商：{vendor}")
+            else:
+                raise ValueError(
+                    "未指定且无法探测到有效厂商（Vendor）：请通过 --vendor 指定"
+                    "（如 enginetech/inspur/zte），或确认 BMC 可被 VendorDetector 识别"
+                    f"（探测结果：{detected}）。程序终止。"
+                )
+        # 按厂商取对应配置段；指定厂商无对应段时回退到 default 段 / 顶层
+        vcfg = (conf_section.get("vendors") or {}).get(vendor, {}) if vendor else {}
+        dcfg = conf_section.get("default") or {}
+
+        def pick(attr: str, key: str, default=None):
+            """参数取值优先级：CLI(self) > 厂商段 > default段 > 顶层 > default"""
+            val = getattr(self, attr, None)
+            if val in (None, ""):
+                val = vcfg.get(key)
+            if val in (None, ""):
+                val = dcfg.get(key)
+            if val in (None, ""):
+                val = conf_section.get(key)
+            return val if val is not None else default
+
+        self.IMAGE_URI         = pick("IMAGE_URI", "ImageURI")
+        self.DEFAULT_IMAGE_URI = pick("DEFAULT_IMAGE_URI", "DefaultImageURI")
+        self.PROTOCOL          = pick("PROTOCOL", "Protocol", "HTTP")
+        self.IMAGE_USER        = pick("IMAGE_USER", "ImageUser")
+        self.IMAGE_PASS        = pick("IMAGE_PASS", "ImagePass")
+        self.TARGETS           = pick("TARGETS", "Targets")
+        self.PRESERVE_CONF      = bool(pick("PRESERVE_CONF", "PreserveConf", False))
+        if not self.VENDOR:
+            self.VENDOR         = vendor or None
 
     # ── 辅助：获取当前 BMC 固件版本 ─────────────────────────────────────────
 
@@ -180,7 +260,7 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
         while time.time() - reset_start < PING_TIMEOUT_SEC:
             try:
                 r = subprocess.run(
-                    ["ping", "-c", "1", "-W", "2", self.BMC_IP],
+                    _ping_cmd(self.BMC_IP),
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
                 if r.returncode == 0:
@@ -205,8 +285,10 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
                     host=self.BMC_IP,
                     username=self.USERNAME,
                     password=self.PASSWORD,
-                    connect_timeout=10,
+                    connect_timeout=15,
                     read_timeout=30,
+                    retry_on_read_timeout=True,
+                    retry_5xx=1,
                 )
                 mfr = tmp.get_manufacturer()
                 tmp.close()
@@ -225,12 +307,20 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
             return False
 
         # ── 阶段3：IPMI 二次确认稳定 ─────────────────────────────────────────
+        if _is_windows():
+            # Windows 下不执行 ipmitool（无原生 ipmitool），跳过 IPMI 稳定性确认，
+            # 仅以 ping + Redfish 两阶段作为恢复判据
+            test.print_log("WARNING",
+                "[阶段3] Windows 环境跳过 IPMI 检测（不执行 ipmitool），"
+                "以 ping + Redfish 恢复为准")
+            return True
+
         test.print_log("INFO", f"[阶段3] 等待 IPMI 恢复（超时 {IPMI_TIMEOUT_SEC}s）...")
 
         def _mc_info_ok() -> bool:
             try:
                 r = subprocess.run(
-                    ["ipmitool", "-I", "lanplus", "-H", self.BMC_IP,
+                    [IPMITOOL_BIN, "-I", "lanplus", "-H", self.BMC_IP,
                      "-U", self.USERNAME, "-P", self.PASSWORD, "mc", "info"],
                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15,
                 )
@@ -274,19 +364,36 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
         phase: dict[str, Any]  = {"phase_label": phase_label, "image_uri": image_uri}
         checks: list[tuple[str, bool]] = []
 
-        # ── 步骤1：simple_update() ──────────────────────────────────────────
+        # ── 步骤1：simple_update()（按厂商路由，不写死策略）──────────────────
+        # 解析实际厂商：显式指定优先，否则交由 SDK 自动探测
+        resolved_vendor = self.VENDOR or VendorDetector.detect(self.client)
+        # enginetech(安擎) 必须显式指定 Targets（策略内部已禁止自动推导，未传会直接报错）；
+        # 其它厂商沿用既有 SIMPLE_UPDATE_TARGETS（/redfish/v1/Managers/1）
         su_kwargs: dict[str, Any] = {
             "image_uri":         image_uri,
             "transfer_protocol": self.PROTOCOL,
-            "targets":           SIMPLE_UPDATE_TARGETS,
-            "flash_item":        "BMC",
+            "vendor":            self.VENDOR,   # None → SDK 自动探测
+            "image_type":        "BMC",          # enginetech(安擎): Oem.Public.ImageType
+            "flash_item":        "BMC",          # inspur 等: Oem.Public.FlashItem
         }
-        if self.PRESERVE_CONF:
-            su_kwargs["preserve_config"] = True
+        if resolved_vendor != "enginetech":
+            su_kwargs["targets"] = SIMPLE_UPDATE_TARGETS
+        # 显式 Targets（覆盖 SDK 默认）；enginetech(安擎) 场景下若不指定会触发策略报错，必须配置
+        if self.TARGETS:
+            su_kwargs["targets"] = (
+                [t.strip() for t in self.TARGETS.split(",") if t.strip()]
+                if isinstance(self.TARGETS, str) else list(self.TARGETS)
+            )
+        su_kwargs["preserve_config"] = self.PRESERVE_CONF   # enginetech(安擎): Oem.Public.PreserveConf
+        # 文件服务器(镜像源)凭据 → enginetech(安擎): 根级 Username/Password（供 BMC 拉取镜像鉴权）
+        if self.IMAGE_USER:
+            su_kwargs["username"] = self.IMAGE_USER
+        if self.IMAGE_PASS:
+            su_kwargs["password"] = self.IMAGE_PASS
 
         test.print_log("INFO",
-            f"[{phase_label}] SDK simple_update — flash_item=BMC, "
-            f"protocol={self.PROTOCOL}, image_uri={image_uri}")
+            f"[{phase_label}] SDK simple_update — vendor={resolved_vendor}, "
+            f"image_type=BMC, protocol={self.PROTOCOL}, image_uri={image_uri}")
         try:
             resp = self.client.simple_update(**su_kwargs)
             test.print_log("INFO", f"[{phase_label}] SimpleUpdate 响应：{resp}")
@@ -368,6 +475,10 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
             host=self.BMC_IP,
             username=self.USERNAME,
             password=self.PASSWORD,
+            connect_timeout=15,
+            read_timeout=30,
+            retry_on_read_timeout=True,
+            retry_5xx=1,
         )
 
         recover_ok = self._bmc_reset_and_wait(test)
@@ -383,6 +494,10 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
             host=self.BMC_IP,
             username=self.USERNAME,
             password=self.PASSWORD,
+            connect_timeout=15,
+            read_timeout=30,
+            retry_on_read_timeout=True,
+            retry_5xx=1,
         )
         version_after = self._get_bmc_version(test)
         test.print_log("INFO", f"[{phase_label}] 刷新后 BMC 版本：{version_after}")
@@ -398,14 +513,6 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
         test = CommonFunction()
         test.print_log("INFO", f"测试用例名称：{self.TEST_NAME}，编号：{self.TEST_NUM}")
         test.print_log("INFO", "测试开始")
-
-        if not self.IMAGE_URI:
-            test.print_log("ERROR",
-                "未指定 --image-uri（新版本固件镜像 URI），无法执行固件刷新，直接 FAIL")
-            self.command_check_result = "FAIL"
-            self._write_results({}, "FAIL", "SKIP", "Unknown")
-            return
-
         detail         = {}
         phase_a_result = "FAIL"
         phase_b_result = "SKIP"
@@ -416,7 +523,20 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
                 host=self.BMC_IP,
                 username=self.USERNAME,
                 password=self.PASSWORD,
+                connect_timeout=15,
+                read_timeout=20,
+                retry_on_read_timeout=True,
+                retry_5xx=1,
             )
+            # ── 动态解析厂商并应用配置段（client 已就绪，可动态探测）────────
+            self._resolve_vendor_config(test)
+
+            if not self.IMAGE_URI:
+                test.print_log("ERROR",
+                    "未指定 --image-uri（新版本固件镜像 URI），无法执行固件刷新，直接 FAIL")
+                self.command_check_result = "FAIL"
+                self._write_results({}, "FAIL", "SKIP", "Unknown")
+                return
 
             # ── 记录刷新前版本 ────────────────────────────────────────────
             version_before = self._get_bmc_version(test)
@@ -484,6 +604,8 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
                     test.print_log("ERROR",
                         "阶段B FAIL（BMC 固件未恢复至默认版本，需人工介入！）")
 
+        except ValueError as e:
+            test.print_log("ERROR", str(e))
         except Exception as e:
             test.print_log("ERROR", f"未处理异常：{e}")
             traceback.print_exc()
@@ -570,6 +692,10 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         CommonFunction.print_log("ERROR", "检测到键盘中断，提前终止")
         exit_code = 130
+    except ValueError as e:
+        # 配置类错误（如未指定厂商），仅输出清晰提示，不打 traceback
+        CommonFunction.print_log("ERROR", str(e))
+        exit_code = 2
     except Exception as e:
         CommonFunction.print_log("ERROR", f"发生未处理异常：{e}")
         traceback.print_exc()

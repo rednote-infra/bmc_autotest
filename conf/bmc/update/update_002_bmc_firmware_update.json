@@ -3,11 +3,27 @@
         "TestName": "BMC 固件版本刷新功能测试",
         "TestNum": "Redfish_UpdateService_002",
         "LogBasename": "update_002_bmc_firmware_update",
-        "Protocol": "HTTP",
-        "ImageURI": "",
-        "DefaultImageURI": "",
         "BMC_IP": "",
         "UserName": "",
-        "PassWord": ""
+        "PassWord": "",
+        "Vendor": "",
+        "default": {
+            "Protocol": "HTTP",
+            "ImageURI": "",
+            "DefaultImageURI": "",
+            "UserName": "",
+            "PassWord": ""
+        },
+        "vendors": {
+            "enginetech": {
+                "ImageURI": "http://ip/update.ima",
+                "DefaultImageURI": "http://ip/origin.ima",
+                "Targets": ["/redfish/v1/UpdateService/FirmwareInventory/BMCImage1"],
+                "ImageUser": "xxx",
+                "ImagePass": "xxx",
+                "Protocol": "HTTP",
+                "PreserveConf": true
+            }
+        }
     }
 }
