@@ -35,10 +35,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.info_check_function import resolve_uri
 
 from redfish_sdk import RedfishClient, RedfishException
 
-SOL_INFO_URI     = "/redfish/v1/Managers/1/SOLSourceControlInfo"
+# 单例资源 ID 按项目归一化：安擎 → /Self，其他 → /1
+SOL_INFO_URI     = resolve_uri("/redfish/v1/Managers/1/SOLSourceControlInfo")
 SOL_CAPTURE_SEC  = 30    # SOL 日志采集时长（秒）
 SOL_CMD_TIMEOUT  = 60    # ipmitool sol activate 总超时（秒，含采集时间 + 裕量）
 

@@ -16,10 +16,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.info_check_function import resolve_uri
 
 from redfish_sdk import RedfishClient, RedfishException
 
-DNS_SERVICE_URI = "/redfish/v1/Managers/1/DnsService"
+# 单例资源 ID 按项目归一化：安擎 → /Self，其他 → /1
+DNS_SERVICE_URI = resolve_uri("/redfish/v1/Managers/1/DnsService")
 
 class Managers016DnsCheck(BmcTestBase):
     """BMC DNS 服务配置检查

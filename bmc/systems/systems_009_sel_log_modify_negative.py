@@ -34,6 +34,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.info_check_function import resolve_uri
 
 from redfish_sdk import RedfishClient, RedfishException  # noqa: F401
 
@@ -183,7 +184,7 @@ class SELLogModifyNegativeCheck(BmcTestBase):
                 "name": "nonexistent_path",
                 "desc": "PATCH 不存在的 LogEntry 路径",
                 "target": "N/A",
-                "odata_id": "/redfish/v1/Systems/1/LogServices/SEL/Entries/nonexistent_entry",
+                "odata_id": resolve_uri("/redfish/v1/Systems/1/LogServices/SEL/Entries/nonexistent_entry"),
                 "body": {"Message": "test"},
             },
         ]

@@ -17,10 +17,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.info_check_function import resolve_uri
 
 from redfish_sdk import RedfishClient, RedfishException
 
-NTP_URI = "/redfish/v1/Managers/1/NtpService"
+# 单例资源 ID 按项目归一化：安擎 → /Self，其他 → /1
+NTP_URI = resolve_uri("/redfish/v1/Managers/1/NtpService")
 
 # 测试用 NTP 服务器地址（可替换为实际可用的 NTP 服务器）
 TEST_NTP_SERVER_1 = "ntp.aliyun.com"

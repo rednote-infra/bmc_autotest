@@ -36,7 +36,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
-from func.info_check_function import load_config
+from func.info_check_function import load_config, resolve_uri
 
 from redfish_sdk import RedfishClient, RedfishException
 
@@ -111,7 +111,11 @@ class LogDownloadTest(BmcTestBase):
         self.client = RedfishClient(self.BMC_IP, self.USERNAME, self.PASSWORD)
 
     def _try_post(self, url, body, label):
-        """POST 指定接口，返回 (success: bool, http_code_hint: str)"""
+        """POST 指定接口，返回 (success: bool, http_code_hint: str)
+
+        URL 中的单例资源 ID 先按项目归一化（安擎 /Systems|Managers|Chassis/1 → /Self）。
+        """
+        url = resolve_uri(url)
         CommonFunction.print_log("INFO", f"[{label}] POST {url}，Body={body}")
         try:
             self.client.post(url, body)

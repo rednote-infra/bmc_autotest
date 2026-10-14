@@ -16,6 +16,7 @@ import time
 import urllib.error
 import urllib.request
 from func.common_function import CommonFunction
+from func.info_check_function import resolve_uri
 
 class BmcWebClient:
     """BMC Web HTTP 客户端，基于 Redfish Session 认证"""
@@ -87,7 +88,12 @@ class BmcWebClient:
     # ------------------------------------------------------------------
 
     def _request(self, method: str, path: str, body=None, extra_headers=None):
-        """发送 HTTP 请求，返回 (status_code, response_body_dict_or_str)"""
+        """发送 HTTP 请求，返回 (status_code, response_body_dict_or_str)
+
+        path 中的单例资源 ID 会先按项目归一化（安擎 /Systems|Managers|Chassis/1
+        → /Self），其他项目原样通过。
+        """
+        path = resolve_uri(path)
         headers = {'X-Auth-Token': self.token, 'Content-Type': 'application/json'}
         if extra_headers:
             headers.update(extra_headers)
