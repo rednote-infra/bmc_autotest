@@ -15,6 +15,8 @@ import ssl
 import urllib.error
 import urllib.request
 
+from func.info_check_function import resolve_uri
+
 class BmcHttpClient:
     """Redfish HTTP 客户端
 
@@ -52,7 +54,12 @@ class BmcHttpClient:
     # ─────────────────────────────────────────────────────
     def request(self, method: str, path: str, body=None, token: str = None,
                 basic_auth: tuple = None, extra_headers: dict = None):
-        """发送请求，返回 (status_code, body, headers_dict)"""
+        """发送请求，返回 (status_code, body, headers_dict)
+
+        path 中的单例资源 ID 会先按项目归一化（安擎 /Systems|Managers|Chassis/1
+        → /Self），其他项目原样通过。
+        """
+        path = resolve_uri(path)
         headers = {"Content-Type": "application/json"}
         if token:
             headers["X-Auth-Token"] = token

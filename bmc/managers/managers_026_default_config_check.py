@@ -35,6 +35,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.info_check_function import resolve_uri
 
 from redfish_sdk import RedfishClient
 
@@ -75,7 +76,7 @@ class Managers026DefaultConfigCheck(BmcTestBase):
             test.print_log("WARNING", "[SDK-GAP] get_raw('/redfish/v1/Managers/1/EthernetInterfaces') "
                            "获取 OEM.NCSIModeSelect 字段：SDK EthernetInterface 模型不含 OEM 字段，"
                            "且存在 pydantic 解析 bug，保留 get_raw，待 SDK 完善后替换")
-            eths = self.client.get_raw("/redfish/v1/Managers/1/EthernetInterfaces")
+            eths = self.client.get_raw(resolve_uri("/redfish/v1/Managers/1/EthernetInterfaces"))
             found_ncsi = False
             for m in eths.get("Members", []):
                 ei = self.client.get_raw(m["@odata.id"])
@@ -118,7 +119,7 @@ class Managers026DefaultConfigCheck(BmcTestBase):
             test.print_log("WARNING", "[SDK-GAP] get_raw('/redfish/v1/Managers/1/EthernetInterfaces') "
                            "获取 IPv6Addresses：SDK EthernetInterface 存在 pydantic 解析 bug，"
                            "保留 get_raw，待 SDK 修复后替换")
-            eths = self.client.get_raw("/redfish/v1/Managers/1/EthernetInterfaces")
+            eths = self.client.get_raw(resolve_uri("/redfish/v1/Managers/1/EthernetInterfaces"))
             global_ipv6_list = []
             for m in eths.get("Members", []):
                 ei = self.client.get_raw(m["@odata.id"])
@@ -160,7 +161,7 @@ class Managers026DefaultConfigCheck(BmcTestBase):
             test.print_log("WARNING", "[SDK-GAP] get_raw('/redfish/v1/Managers/1/EthernetInterfaces') "
                            "获取 IPv4Addresses.AddressOrigin：SDK EthernetInterface 存在 pydantic 解析 bug，"
                            "保留 get_raw，待 SDK 修复后替换")
-            eths = self.client.get_raw("/redfish/v1/Managers/1/EthernetInterfaces")
+            eths = self.client.get_raw(resolve_uri("/redfish/v1/Managers/1/EthernetInterfaces"))
             members = eths.get("Members", [])
             results = []
             for m in members:

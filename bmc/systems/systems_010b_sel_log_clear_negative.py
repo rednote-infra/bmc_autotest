@@ -30,6 +30,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.info_check_function import resolve_uri
 
 from redfish_sdk import RedfishClient, RedfishException  # noqa: F401
 
@@ -98,9 +99,9 @@ class SELLogClearNegativeCheck(BmcTestBase):
     def _get_test_cases(self, log_id, source):
         """构造非法清除测试用例"""
         if source == "Managers":
-            base = f"/redfish/v1/Managers/1/LogServices/{log_id}"
+            base = resolve_uri(f"/redfish/v1/Managers/1/LogServices/{log_id}")
         else:
-            base = f"/redfish/v1/Systems/1/LogServices/{log_id}"
+            base = resolve_uri(f"/redfish/v1/Systems/1/LogServices/{log_id}")
         return [
             {
                 "name": "delete_log_service",
@@ -118,7 +119,7 @@ class SELLogClearNegativeCheck(BmcTestBase):
             {
                 "name": "clearlog_nonexistent",
                 "desc": "POST ClearLog 到不存在的路径",
-                "odata_id": "/redfish/v1/Systems/1/LogServices/NonExistent/Actions/LogService.ClearLog",
+                "odata_id": resolve_uri("/redfish/v1/Systems/1/LogServices/NonExistent/Actions/LogService.ClearLog"),
                 "method": "POST",
             },
             {

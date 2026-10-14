@@ -30,11 +30,13 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.info_check_function import resolve_uri
 
 from redfish_sdk import RedfishClient, RedfishException
 
-SNMP_URI       = "/redfish/v1/Managers/1/SnmpService"
-SNMP_TEST_URI  = "/redfish/v1/Managers/1/SnmpService/Actions/SnmpService.SubmitTestEvent"
+# 单例资源 ID 按项目归一化：安擎 → /Self，其他 → /1
+SNMP_URI       = resolve_uri("/redfish/v1/Managers/1/SnmpService")
+SNMP_TEST_URI  = resolve_uri("/redfish/v1/Managers/1/SnmpService/Actions/SnmpService.SubmitTestEvent")
 
 class Managers024SnmpTrapTest(BmcTestBase):
     """BMC SNMP Trap 测试告警触发测试"""

@@ -57,6 +57,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.info_check_function import resolve_uri, resolve_uris
 
 from redfish_sdk import RedfishClient, RedfishException
 from redfish_sdk.exceptions import RedfishTimeoutError
@@ -69,9 +70,10 @@ POWEROFF_WAIT_SEC    = 30     # AC 断电后等待时间
 POWERON_TIMEOUT_SEC  = 600    # AC 上电后等待 OS POST 完成超时
 POLL_INTERVAL_SEC    = 10     # 恢复检测轮询间隔
 
-SIMPLE_UPDATE_TARGETS = ["/redfish/v1/Systems/1"]
-SYSTEMS_URI           = "/redfish/v1/Systems/1"
-RESET_URI             = "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset"
+# 单例资源 ID 按项目归一化：安擎 → /Self，其他 → /1
+SIMPLE_UPDATE_TARGETS = resolve_uris(["/redfish/v1/Systems/1"])
+SYSTEMS_URI           = resolve_uri("/redfish/v1/Systems/1")
+RESET_URI             = resolve_uri("/redfish/v1/Systems/1/Actions/ComputerSystem.Reset")
 
 
 class Update003BiosFirmwareUpdate(BmcTestBase):

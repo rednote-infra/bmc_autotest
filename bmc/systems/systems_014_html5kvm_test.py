@@ -33,10 +33,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.info_check_function import resolve_uri
 
 from redfish_sdk import RedfishClient, RedfishException
 
-KVM_SERVICE_URI = "/redfish/v1/Managers/1/KvmService"
+# 单例资源 ID 按项目归一化：安擎 → /Self，其他 → /1
+KVM_SERVICE_URI = resolve_uri("/redfish/v1/Managers/1/KvmService")
 
 # 测试创建的会话数（验证 ≥2 的业务要求）
 TEST_SESSION_COUNT = 3
