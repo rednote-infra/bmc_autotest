@@ -21,6 +21,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.info_check_function import resolve_uri
 
 from redfish_sdk import RedfishClient, RedfishException
 
@@ -30,7 +31,8 @@ IPMI_TIMEOUT = 600    # 业务要求：10min 内 IPMI 接口恢复（秒）
 POLL_INTERVAL = 10    # 轮询间隔（秒）
 
 # BMC Manager Reset Action URI（注意：不是 Systems 的 Reset，Systems Reset 会重启服务器整机）
-MANAGER_RESET_URI = "/redfish/v1/Managers/1/Actions/Manager.Reset"
+# 单例资源 ID 按项目归一化：安擎 → /Self，其他 → /1
+MANAGER_RESET_URI = resolve_uri("/redfish/v1/Managers/1/Actions/Manager.Reset")
 
 class Managers007BmcReset(BmcTestBase):
     """BMC 冷/热重启功能测试

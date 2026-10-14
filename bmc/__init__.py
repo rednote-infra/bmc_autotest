@@ -21,6 +21,6 @@
 # 项目自身版本（遵循 SemVer）；变更历史见根目录 CHANGELOG.md
 __version__ = "1.0.0"
 
-# 当前适配并锁定的 redfish-python-sdk 版本（PyPI 最新发布版本，2026-08-05）
+# 当前适配并锁定的 redfish-python-sdk 版本（PyPI 最新发布版本，2026-10-12）
 # 与 requirements.txt 中锁定的版本保持一致
-__sdk_version__ = "1.2.0"
+__sdk_version__ = "1.3.0"

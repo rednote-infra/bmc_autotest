@@ -11,6 +11,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 from func.common_function import CommonFunction
 from func.bmc_web_test_base import BmcWebTestBase
 from func.web_client import BmcWebClient
+from func.info_check_function import resolve_uri
 
 
 class WebUidControl(BmcWebTestBase):
@@ -29,8 +30,8 @@ class WebUidControl(BmcWebTestBase):
             self.command_check_result = 'FAIL'
             self._save(test, steps);  return
 
-        chassis_uri = self.conf.get('ChassisUri', '/redfish/v1/Chassis/1')
-        patch_uri   = self.conf.get('PatchUri', '/redfish/v1/Chassis/1')
+        chassis_uri = resolve_uri(self.conf.get('ChassisUri', '/redfish/v1/Chassis/1'))
+        patch_uri   = resolve_uri(self.conf.get('PatchUri', '/redfish/v1/Chassis/1'))
 
         # GET Chassis，同时拿 ETag（浪潮等厂商 PATCH 需要 If-Match）
         _ctx = ssl.create_default_context(); _ctx.check_hostname = False; _ctx.verify_mode = ssl.CERT_NONE

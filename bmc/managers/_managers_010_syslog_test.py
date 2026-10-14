@@ -17,11 +17,13 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.info_check_function import resolve_uri
 
 from redfish_sdk import RedfishClient, RedfishException
 
-SYSLOG_URI = "/redfish/v1/Managers/1/SyslogService"
-SUBMIT_TEST_EVENT_URI = "/redfish/v1/Managers/1/SyslogService/Actions/SyslogService.SubmitTestEvent"
+# 单例资源 ID 按项目归一化：安擎 → /Self，其他 → /1
+SYSLOG_URI = resolve_uri("/redfish/v1/Managers/1/SyslogService")
+SUBMIT_TEST_EVENT_URI = resolve_uri("/redfish/v1/Managers/1/SyslogService/Actions/SyslogService.SubmitTestEvent")
 
 class Managers010SyslogTest(BmcTestBase):
     """BMC Syslog 配置功能测试

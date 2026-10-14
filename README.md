@@ -241,6 +241,46 @@ python3 -m bmc.bmc_runner -i <bmc_ip> -u <username> -p <password> --only chassis
   ```
   默认关闭以保持控制台输出干净；定位完成后无需该变量即可恢复正常。
 
+---
+
+### 多项目适配（单例资源 ID）
+
+Redfish 中 `Systems` / `Managers` / `Chassis` 均为**单实例集合**，其资源 ID 由厂商固件决定：
+
+| 项目 | Systems | Managers | Chassis |
+| --- | --- | --- | --- |
+| **安擎（Enginetech）** | `/redfish/v1/Systems/Self` | `/redfish/v1/Managers/Self` | `/redfish/v1/Chassis/Self` |
+| 其他项目 | `/redfish/v1/Systems/1` | `/redfish/v1/Managers/1` | `/redfish/v1/Chassis/1` |
+
+脚本与配置文件中**统一书写 `/1` 形式**，运行时由 `func.info_check_function.resolve_uri()` 按项目自动归一化，
+同一套代码即可在多项目间复用，无需逐条改 URI。
+
+**项目开关**：`conf/bmc/bmc_runner_suites.json` 顶层 `project` 字段（未配置时回退读环境变量 `BMC_PROJECT`）：
+
+```json
+{
+    "project": "Enginetech",
+    "suites": { "...": "..." }
+}
+```
+
+- `project` 为 `Enginetech` / `AnQing` / `安擎` 时，`/Systems/1`、`/Managers/1`、`/Chassis/1` 全部替换为 `/Self`；
+- 其他取值或未配置时，`/1` 原样保留，行为与改动前**完全一致**；
+- 仅替换集合下的**第一个**资源 ID 段：`/redfish/v1/Systems/1/Processors/1` 只会变成
+  `/redfish/v1/Systems/Self/Processors/1`，末尾的 `1` 保持不变。
+
+**已自动归一化的入口**（无需改动脚本）：`BmcWebClient._request()`（全部 web 套件，含配置文件里的 URI）、
+`BmcHttpClient.request()`、`protocol_001_dmtf_compliance._request()`、`systems_011_log_download_test._try_post()`。
+
+**新增脚本时的写法**（仅 `client.get_raw()/post()/patch()/delete()` 直写 URI 的场景需要显式包裹）：
+
+```python
+from func.info_check_function import resolve_uri
+
+NTP_URI = resolve_uri("/redfish/v1/Managers/1/NtpService")   # 安擎 → /redfish/v1/Managers/Self/NtpService
+self.client.get_raw(NTP_URI)
+```
+
 
 ## **Chassis资源**
 

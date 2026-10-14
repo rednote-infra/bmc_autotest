@@ -17,10 +17,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.info_check_function import resolve_uri
 
 from redfish_sdk import RedfishClient, RedfishException
 
-MANAGER_URI = "/redfish/v1/Managers/1"
+# 单例资源 ID 按项目归一化：安擎 → /Self，其他 → /1
+MANAGER_URI = resolve_uri("/redfish/v1/Managers/1")
 
 # 测试用时区偏移（UTC+9 日本标准时间）
 TEST_TIMEZONE = "+09:00"

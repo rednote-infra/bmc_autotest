@@ -271,6 +271,19 @@ data = client.get_raw("/redfish/v1/Managers/1")
 oem_info = data.get("Oem", {})
 ```
 
+> **⚠️ 多项目单例资源 ID**：上述示例中的 `/1` 为**默认项目**的资源 ID。安擎（Enginetech）项目的固件使用
+> `/redfish/v1/Systems/Self`、`/redfish/v1/Managers/Self`、`/redfish/v1/Chassis/Self`。
+> 因此测试脚本中**保持书写 `/1` 形式**，在传入 `get_raw()` / `post()` / `patch()` / `delete()` 前用
+> `func.info_check_function.resolve_uri()` 归一化：
+>
+> ```python
+> from func.info_check_function import resolve_uri
+>
+> client.patch(resolve_uri("/redfish/v1/Systems/1"), {"Boot": {...}})  # 安擎 → /redfish/v1/Systems/Self
+> ```
+>
+> 项目开关为 `conf/bmc/bmc_runner_suites.json` 顶层 `project` 字段；非安擎项目下 `resolve_uri()` 为空操作。
+
 ---
 
 ### 2.13 辅助工具方法
@@ -497,6 +510,9 @@ from redfish_sdk import RedfishResource
 url = client.get_odata_id(RedfishResource.PROCESSORS)
 # → "/redfish/v1/Systems/1/Processors"
 ```
+
+> 注：返回路径中的单例资源 ID 由厂商固件决定（安擎项目为 `/Self`，见 2.12 节说明）。如需在返回路径上继续拼接
+> 子路径，可先用 `func.info_check_function.resolve_uri()` 转换。
 
 | 分组 | 枚举值 | Redfish 字段名 |
 |------|--------|---------------|

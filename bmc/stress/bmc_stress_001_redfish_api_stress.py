@@ -38,17 +38,19 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.info_check_function import resolve_uris
 
 from redfish_sdk import RedfishClient, RedfishException
 
 # ── 压测目标接口 ──────────────────────────────────────────────────────────────
-STRESS_URIS = [
+# 单例资源 ID 按项目归一化：安擎 → /Self，其他 → /1（见 func.info_check_function）
+STRESS_URIS = resolve_uris([
     "/redfish/v1/Systems/1",
     "/redfish/v1/Managers/1",
     "/redfish/v1/Chassis/1",
     "/redfish/v1/Chassis/1/Thermal",
     "/redfish/v1/Chassis/1/Power",
-]
+])
 
 # ── PASS 标准 ────────────────────────────────────────────────────────────────
 MAX_FAIL_COUNT    = 0     # 连接失败次数必须为 0（失败次数 > 0 即 FAIL，但不提前终止）

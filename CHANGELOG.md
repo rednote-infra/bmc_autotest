@@ -10,6 +10,38 @@
 
 ## [Unreleased]
 
+### Added — 多项目适配（单例资源 ID 按项目区分）
+- 新增 `func/info_check_function.py` 的项目区分能力：
+  - `load_project_name()`：读取 `conf/bmc/bmc_runner_suites.json` 顶层 `project` 字段（未配置时回退环境变量 `BMC_PROJECT`）；
+  - `is_anqing_project()` / `get_singleton_id()`：安擎项目 → `Self`，其他项目 → `1`；
+  - `resolve_uri()` / `resolve_uris()`：仅把 `/redfish/v1/{Systems|Managers|Chassis}/1` 集合下的**第一个**资源 ID 段
+    归一化为项目对应值，更深层的同名字段（如 `/Systems/1/Processors/1`）保持不变。
+- `conf/bmc/bmc_runner_suites.json` 新增顶层 `project` 字段（默认 `Enginetech`，另支持 `AnQing` / `安擎` 别名）作为项目开关；
+  **配置文件中所有 URI 保持 `/1` 不变**，由代码在运行时归一化，避免静态配置与项目绑定。
+- HTTP 网关层统一接入归一化：`BmcWebClient._request()`（全部 web 套件，含配置文件 URI）、
+  `BmcHttpClient.request()`、`protocol_001_dmtf_compliance._request()`、`systems_011_log_download_test._try_post()`。
+- 脚本内硬编码 URI 常量改用 `resolve_uri()` / `resolve_uris()` 包裹：
+  `managers_006b/007/009/026`、`_managers_008/010/011/012/013/015/016/017/018/019/020/021/022/023/024/025`、
+  `systems_009/010b/011/014`、`update_002/003`、`bmc_stress_001_redfish_api_stress`、`web_001`/`web_007`。
+- 非安擎项目下 `resolve_uri()` 为空操作，运行时行为与改动前完全一致。
+- 文档同步：`README.md` 新增「使用方法 → 多项目适配（单例资源 ID）」，`docs/redfish_python_sdk_api.md` 的
+  原始 JSON 访问与 `RedfishResource` 章节补充单例 ID 说明。
+
+### Changed — 依赖升级（redfish-python-sdk 1.2.0 → 1.3.0）
+- **升级原因**：1.2.x 的 `ChassisManager.get()` / `ManagersManager.get()` 直接请求
+  `/redfish/v1/Chassis/1` 与 `/redfish/v1/Managers/1` 且**无兜底**，安擎固件返回 404，
+  是安擎项目跑不通的根因；1.3.0 为此提供集合兜底。
+- **SDK 侧变化**：
+  - `ChassisManager.get()` / `ManagersManager.get()`：单例 ID 默认值改为 `Optional`，
+    404 后回退集合 `Members[0].@odata.id`（仅对默认值生效，显式传参不兜底）；
+  - 移除 `_get_chassis_collection()` 中 Lenovo 的 `/redfish/v1/Chassis/1` 硬编码兜底；
+  - 新增 `EnginetechUpdateStrategy`（强制要求显式 `targets`）与
+    `EnginetechLogCollectStrategy`（日志服务挂在 `Systems/Self/LogServices/BlackBox`）。
+- 脚本从不显式传递 `chassis_id` / `manager_id` / `system_id`，升级后自动受益，用例无需改动。
+- 同步更新 `requirements.txt`（`>=1.3.0`）与 `bmc/__init__.py::__sdk_version__`（`1.3.0`）。
+- **已知代价**：安擎下 Chassis / Managers 每次调用多 1 次 404 GET 与 1 次重复的 `/redfish/v1/` 请求，
+  属预期行为，非故障。
+
 ## [1.0.0] — 2026-09-03
 
 首个纳入 Git Tag 版本管控的基线版本。

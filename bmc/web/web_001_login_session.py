@@ -19,6 +19,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 from func.common_function import CommonFunction
 from func.bmc_web_test_base import BmcWebTestBase
 from func.web_client import BmcWebClient
+from func.info_check_function import resolve_uri
 
 
 class WebLoginSession(BmcWebTestBase):
@@ -60,8 +61,9 @@ class WebLoginSession(BmcWebTestBase):
         ctx = ssl.create_default_context(); ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
         stale_code: int = -1
         try:
-            req = urllib.request.Request(f'https://{self.BMC_IP}/redfish/v1/Systems/1',
-                                         headers={'X-Auth-Token': old_token})
+            req = urllib.request.Request(
+                f'https://{self.BMC_IP}' + resolve_uri('/redfish/v1/Systems/1'),
+                headers={'X-Auth-Token': old_token})
             with urllib.request.urlopen(req, context=ctx, timeout=self.TIMEOUT) as r:
                 stale_code = r.status
         except urllib.error.HTTPError as e:

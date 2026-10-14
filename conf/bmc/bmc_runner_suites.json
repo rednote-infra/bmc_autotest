@@ -1,4 +1,5 @@
 {
+    "project": "Enginetech",
     "suites": {
         "chassis": [
             "chassis_001_drives_check",

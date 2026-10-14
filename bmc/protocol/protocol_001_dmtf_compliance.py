@@ -44,6 +44,7 @@ import urllib.request
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.bmc_event_test_base import BmcEventTestBase
+from func.info_check_function import resolve_uri
 
 # ─────────────────────────────────────────────────────────
 # 常量
@@ -107,7 +108,11 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         """
         发送 HTTP 请求，返回 (status_code, body_dict_or_str, resp_headers_dict)
         resp_headers_dict: 全小写 key
+
+        path 中的单例资源 ID 会先按项目归一化（安擎 /Systems|Managers|Chassis/1
+        → /Self），其他项目原样通过。
         """
+        path = resolve_uri(path)
         headers = {"Content-Type": "application/json"}
         if token:
             headers["X-Auth-Token"] = token
