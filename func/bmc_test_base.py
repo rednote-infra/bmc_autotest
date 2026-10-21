@@ -110,13 +110,21 @@ class BmcTestBase:
         CommonFunction.print_log("DEBUG", "加载配置文件完成")
 
     def _load_extra_config(self, conf_section: dict) -> None:
-        """子类重写此方法加载额外配置参数，默认无操作。
+        """子类重写此方法加载额外配置参数，默认加载公共字段。
 
         Parameters
         ----------
         conf_section : dict
             已经取出的 ``conf[self.case]`` 字典，可直接 .get() 使用。
+
+        公共字段：
+            LogId — SEL 相关脚本可显式指定要检查的 LogService（如 "SEL"）。
+                    未配置则为 None，由脚本按关键字自动匹配。
         """
+        # 公共：统一加载 LogId，使所有 BmcTestBase 子类均可用 self.LOG_ID
+        self.LOG_ID = (conf_section.get("LogId") or "").strip() or None
+        if self.LOG_ID:
+            CommonFunction.print_log("INFO", f"配置指定 LogId = {self.LOG_ID}")
 
     def _init_sdk_client(self) -> None:
         """子类重写此方法初始化 SDK 客户端，默认无操作。

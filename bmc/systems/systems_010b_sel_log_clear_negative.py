@@ -31,6 +31,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.sel_log_helper import find_sel_log_service
 
 from redfish_sdk import RedfishClient, RedfishException  # noqa: F401
 
@@ -63,45 +64,19 @@ class SELLogClearNegativeCheck(BmcTestBase):
             except Exception as e:
                 CommonFunction.print_log("WARNING", f"关闭 SDK 客户端时出错: {str(e)}")
 
-    # ── 找 SEL LogService（Systems → Managers fallback）───────────────────────
+    # ── 找 SEL LogService（跨 Systems / Managers 两侧，公共逻辑）────────────
 
     def _find_sel_log_service(self):
-        """优先从 Systems 获取，失败时 fallback 到 Managers。
+        """委托公共方法实现跨 Systems/Managers 的 SEL 匹配选择。
 
-        Returns
-        -------
-        (log_id, source, log_odata_id) — LogService 的 id、来源及其 @odata.id
+        返回 (Log对象, source)，source 为 "Systems" 或 "Managers"；
+        详见 func/sel_log_helper.find_sel_log_service。
         """
-        try:
-            log_services = self.client.get_system_log_services()
-            if log_services:
-                for svc in log_services:
-                    svc_name = (svc.name or "").lower()
-                    svc_id = (svc.id or "").lower()
-                    if "sel" in svc_name or "sel" in svc_id or "system event" in svc_name:
-                        return svc.id, "Systems", svc.odata_id
-                return log_services[0].id, "Systems", log_services[0].odata_id
-        except Exception as e:
-            CommonFunction.print_log("WARNING", f"Systems Log Services 不可用：{str(e)}")
-
-        CommonFunction.print_log("INFO", "尝试从 Managers 获取 Log Services")
-        try:
-            log_services = self.client.get_manager_log_services()
-            if log_services:
-                for svc in log_services:
-                    svc_name = (svc.name or "").lower()
-                    svc_id = (svc.id or "").lower()
-                    if "sel" in svc_name or "sel" in svc_id or "system event" in svc_name:
-                        return svc.id, "Managers", svc.odata_id
-                return log_services[0].id, "Managers", log_services[0].odata_id
-        except Exception as e:
-            CommonFunction.print_log("ERROR", f"Managers Log Services 也不可用：{str(e)}")
-
-        return None, None, None
+        return find_sel_log_service(self.client, self.LOG_ID)
 
     # ── 构造反向测试用例 ──────────────────────────────────────────────────────
 
-    def _get_test_cases(self, log_id, source, log_odata_id):
+    def _get_test_cases(self, log_odata_id):
         """构造非法清除测试用例（base 取自 SDK Log 对象 @odata.id）"""
         base = log_odata_id or ""
         return [
@@ -176,14 +151,16 @@ class SELLogClearNegativeCheck(BmcTestBase):
 
     def sel_log_clear_negative_check(self) -> tuple:
         CommonFunction.print_log("INFO", "开始查找 SEL Log Service")
-        log_id, source, log_odata_id = self._find_sel_log_service()
-        if log_id is None:
+        log_svc, source = self._find_sel_log_service()
+        if log_svc is None:
             CommonFunction.print_log("ERROR", "Systems 和 Managers 均未找到 Log Service，检查失败")
             return "FAIL", []
 
+        log_id = log_svc.id
+        log_odata_id = log_svc.odata_id
         CommonFunction.print_log("INFO", f"从 {source} 找到 Log Service: {log_id}（{log_odata_id}）")
 
-        test_cases = self._get_test_cases(log_id, source, log_odata_id)
+        test_cases = self._get_test_cases(log_odata_id)
         all_results = []
         result_list = []
 

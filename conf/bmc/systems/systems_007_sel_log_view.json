@@ -5,6 +5,8 @@
         "LogBasename": "systems_007_sel_log_view",
         "BMC_IP": "",
         "UserName": "",
-        "PassWord": ""
+        "PassWord": "",
+        "LogId": "",
+        "EmptyLogPolicy": "FAIL"
     }
 }

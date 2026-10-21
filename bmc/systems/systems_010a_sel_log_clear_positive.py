@@ -32,6 +32,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.sel_log_helper import find_sel_log_service
 
 from redfish_sdk import RedfishClient, RedfishException  # noqa: F401
 
@@ -64,38 +65,15 @@ class SELLogClearPositiveCheck(BmcTestBase):
             except Exception as e:
                 CommonFunction.print_log("WARNING", f"关闭 SDK 客户端时出错: {str(e)}")
 
-    # ── 找 SEL LogService（Systems → Managers fallback）───────────────────────
+    # ── 找 SEL LogService（跨 Systems / Managers 两侧，公共逻辑）────────────
 
     def _find_sel_log_service(self):
-        """优先从 Systems 获取，失败时 fallback 到 Managers。
-        返回 (Log对象, source字符串)，Log 对象由 SDK 类型化解析。
+        """委托公共方法实现跨 Systems/Managers 的 SEL 匹配选择。
+
+        返回 (Log对象, source)，source 为 "Systems" 或 "Managers"；
+        详见 func/sel_log_helper.find_sel_log_service。
         """
-        try:
-            log_services = self.client.get_system_log_services()
-            if log_services:
-                for svc in log_services:
-                    svc_name = (svc.name or "").lower()
-                    svc_id = (svc.id or "").lower()
-                    if "sel" in svc_name or "sel" in svc_id or "system event" in svc_name:
-                        return svc, "Systems"
-                return log_services[0], "Systems"
-        except Exception as e:
-            CommonFunction.print_log("WARNING", f"Systems Log Services 不可用：{str(e)}")
-
-        CommonFunction.print_log("INFO", "尝试从 Managers 获取 Log Services")
-        try:
-            log_services = self.client.get_manager_log_services()
-            if log_services:
-                for svc in log_services:
-                    svc_name = (svc.name or "").lower()
-                    svc_id = (svc.id or "").lower()
-                    if "sel" in svc_name or "sel" in svc_id or "system event" in svc_name:
-                        return svc, "Managers"
-                return log_services[0], "Managers"
-        except Exception as e:
-            CommonFunction.print_log("ERROR", f"Managers Log Services 也不可用：{str(e)}")
-
-        return None, None
+        return find_sel_log_service(self.client, self.LOG_ID)
 
     def _count_entries(self, log_id, source):
         """获取当前日志条目数量"""
@@ -113,13 +91,14 @@ class SELLogClearPositiveCheck(BmcTestBase):
 
     def _clear_via_action(self, log_svc, source):
         """通过 ClearLog Action 清除。
-        Systems 侧用 v1.1.0 clear_system_log()（内部发现 #LogService.ClearLog 并 POST，
-        不支持时抛 RedfishValidationError）；Managers 侧用 SDK get_manager_log_services()
-        获取 Log 对象的 actions 字段取 ClearLog target + post。
+
+        Systems / Managers 两侧分别复用 v1.1.0 的 ``clear_system_log()`` /
+        ``clear_manager_log()``（内部发现 ``#LogService.ClearLog`` 并 POST，
+        不广告该 Action 时抛 ``RedfishValidationError``），不再手动遍历集合取 Action。
         """
         log_id = log_svc.id
 
-        # Systems 侧：v1.1.0 clear_system_log()
+        # Systems 侧：clear_system_log()
         if source != "Managers":
             try:
                 self.client.clear_system_log(log_id)
@@ -129,41 +108,14 @@ class SELLogClearPositiveCheck(BmcTestBase):
                 CommonFunction.print_log("INFO", f"clear_system_log 不可用（{str(e)[:80]}），尝试其他方法")
                 return False, "ClearLog Action 不可用"
 
-        # Managers 侧：use SDK get_manager_log_services() to find the log service
+        # Managers 侧：clear_manager_log()（与 Systems 侧对称）
         try:
-            mgr_logs = self.client.get_manager_log_services()
-            log_svc_obj = None
-            for ls in mgr_logs:
-                if ls.id == log_id:
-                    log_svc_obj = ls
-                    break
-            if log_svc_obj is None:
-                CommonFunction.print_log("ERROR", f"LogService '{log_id}' not found in Manager log services")
-                return False, "获取 Log Service 失败"
+            self.client.clear_manager_log(log_id)
+            CommonFunction.print_log("INFO", "ClearLog Action 执行成功（clear_manager_log）")
+            return True, "ClearLog Action"
         except RedfishException as e:
-            CommonFunction.print_log("ERROR", f"获取 Log Service 信息失败：{str(e)}")
-            return False, "获取 Log Service 失败"
-
-        # 找 ClearLog Action from SDK Log model (actions is Dict[str, Any])
-        actions = log_svc_obj.actions or {}
-        clear_log_action = actions.get("#LogService.ClearLog")
-        if clear_log_action:
-            target = clear_log_action.get("target")
-            if target:
-                CommonFunction.print_log("INFO", f"发现 ClearLog Action: {target}")
-                try:
-                    self.client.post(target, {})
-                    CommonFunction.print_log("INFO", "ClearLog Action 执行成功")
-                    return True, "ClearLog Action"
-                except RedfishException as e:
-                    CommonFunction.print_log("ERROR", f"ClearLog Action 执行失败：{str(e)}")
-                    return False, f"ClearLog Action 失败: {str(e)}"
-            else:
-                CommonFunction.print_log("WARNING", "ClearLog Action 存在但无 target 字段")
-        else:
-            CommonFunction.print_log("INFO", "LogService 不支持 ClearLog Action，尝试其他方法")
-
-        return False, "ClearLog Action 不可用"
+            CommonFunction.print_log("INFO", f"clear_manager_log 不可用（{str(e)[:80]}），尝试其他方法")
+            return False, "ClearLog Action 不可用"
 
     # ── 清除方法 2：DELETE Entries 集合 ──────────────────────────────────────
 
@@ -253,7 +205,7 @@ class SELLogClearPositiveCheck(BmcTestBase):
         clear_success = False
         clear_method = ""
 
-        # 方法 1：ClearLog Action（SDK Log 模型的 actions 字段）
+        # 方法 1：ClearLog Action（复用 SDK clear_*_log() 封装）
         ok, msg = self._clear_via_action(log_svc, source)
         if ok:
             clear_success = True

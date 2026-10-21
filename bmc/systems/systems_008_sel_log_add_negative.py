@@ -32,6 +32,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.sel_log_helper import find_sel_log_service
 
 from redfish_sdk import RedfishClient, RedfishException  # noqa: F401
 
@@ -64,38 +65,15 @@ class SELLogAddNegativeCheck(BmcTestBase):
             except Exception as e:
                 CommonFunction.print_log("WARNING", f"关闭 SDK 客户端时出错: {str(e)}")
 
-    # ── 找 SEL LogService（Systems → Managers fallback）───────────────────────
+    # ── 找 SEL LogService（跨 Systems / Managers 两侧，公共逻辑）────────────
 
     def _find_sel_log_service(self):
-        """优先从 Systems 获取，失败时 fallback 到 Managers。
-        返回 (Log对象, source字符串)，Log 对象由 SDK 类型化解析。
+        """委托公共方法实现跨 Systems/Managers 的 SEL 匹配选择。
+
+        返回 (Log对象, source)，source 为 "Systems" 或 "Managers"；
+        详见 func/sel_log_helper.find_sel_log_service。
         """
-        try:
-            log_services = self.client.get_system_log_services()
-            if log_services:
-                for svc in log_services:
-                    svc_name = (svc.name or "").lower()
-                    svc_id = (svc.id or "").lower()
-                    if "sel" in svc_name or "sel" in svc_id or "system event" in svc_name:
-                        return svc, "Systems"
-                return log_services[0], "Systems"
-        except Exception as e:
-            CommonFunction.print_log("WARNING", f"Systems Log Services 不可用：{str(e)}")
-
-        CommonFunction.print_log("INFO", "尝试从 Managers 获取 Log Services")
-        try:
-            log_services = self.client.get_manager_log_services()
-            if log_services:
-                for svc in log_services:
-                    svc_name = (svc.name or "").lower()
-                    svc_id = (svc.id or "").lower()
-                    if "sel" in svc_name or "sel" in svc_id or "system event" in svc_name:
-                        return svc, "Managers"
-                return log_services[0], "Managers"
-        except Exception as e:
-            CommonFunction.print_log("ERROR", f"Managers Log Services 也不可用：{str(e)}")
-
-        return None, None
+        return find_sel_log_service(self.client, self.LOG_ID)
 
     # ── 构造反向测试用例 ──────────────────────────────────────────────────────
 
