@@ -23,6 +23,8 @@ Update:
 
   PASS 条件：所有测试步骤通过
   FAIL 条件：任意步骤电源状态或 OS 就绪校验失败
+  UNSUPPORTED 条件：POST 返回 HTTP 400（BMC 不支持该 ResetType）时记为 UNSUPPORTED，
+                   不执行后续校验、不影响整体结果（依赖 POST 400 兜底，无需预检 AllowableValues）
 """
 
 import os
@@ -37,6 +39,9 @@ from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
 
 from redfish_sdk import RedfishClient, RedfishException  # noqa: F401
+
+# 测试结果第三态：BMC 不支持该 ResetType（不在 AllowableValues 或 POST 返回 HTTP 400）
+UNSUPPORTED = "UNSUPPORTED"
 
 class PowerControlTest(BmcTestBase):
     """Systems PowerControl 操作测试
@@ -173,38 +178,55 @@ class PowerControlTest(BmcTestBase):
             return False
 
         CommonFunction.print_log("INFO", "等待服务器完成重启（PowerState=On 且带内 IP 通）")
+        # 重启后 OS 需重新引导，带内 IP 可 ping 耗时可能长达数分钟（真机常需数分钟），
+        # 此处与 On 步骤的 OS 就绪等待保持一致，使用 OsReadyTimeoutSeconds，
+        # 避免被 POWER_STATE_TIMEOUT(120s) 误判超时。
         elapsed = 0
-        while elapsed < self.POWER_STATE_TIMEOUT:
+        while elapsed < self.OS_READY_TIMEOUT:
             state = self._get_power_state()
             if state == "On" and self._ping_inband():
                 CommonFunction.print_log("INFO", f"重启完成，耗时约 {elapsed}s")
                 return True
-            time.sleep(self.POWER_STATE_POLL_INTERVAL)
-            elapsed += self.POWER_STATE_POLL_INTERVAL
-        CommonFunction.print_log("ERROR", f"等待重启完成超时（{self.POWER_STATE_TIMEOUT}s）")
+            time.sleep(self.OS_READY_POLL_INTERVAL)
+            elapsed += self.OS_READY_POLL_INTERVAL
+        CommonFunction.print_log("ERROR", f"等待重启完成超时（{self.OS_READY_TIMEOUT}s）")
         return False
 
     # ── 单步测试 ──────────────────────────────────────────────────────────────
 
     def _do_reset(self, reset_type):
-        """发送 ResetType，返回 True/False"""
+        """发送 ResetType
+
+        :return: True（成功）/ False（真实失败）/ UNSUPPORTED（BMC 不支持，HTTP 400）
+        """
         CommonFunction.print_log("INFO", f"发送电源操作：{reset_type}")
         try:
             self.client.reset(reset_type)
             CommonFunction.print_log("INFO", f"POST {reset_type} 成功")
             return True
         except RedfishException as e:
+            detail = f"{getattr(e, 'message', '')} {getattr(e, 'body', '')}"
+            # BMC 不支持该 ResetType 时通常返回 HTTP 400（ActionParameterValueFormatError）
+            if getattr(e, "status_code", None) == 400 and (
+                "ResetType" in detail or "format" in detail
+                or "ActionParameterValueFormatError" in detail or "Reset" in detail
+            ):
+                CommonFunction.print_log("WARNING", f"POST {reset_type} 被 BMC 拒绝（不支持该 ResetType）：{str(e)}")
+                return UNSUPPORTED
             CommonFunction.print_log("ERROR", f"POST {reset_type} 失败：{str(e)}")
             return False
 
     def _test_reset_type(self, reset_type):
         """测试单个 ResetType：POST + 状态校验
 
-        :return: "PASS" / "FAIL"
+        :return: "PASS" / "FAIL" / "UNSUPPORTED"
         """
         CommonFunction.print_log("INFO", f"开始测试：{reset_type}")
         try:
-            if not self._do_reset(reset_type):
+            do_result = self._do_reset(reset_type)
+            if do_result == UNSUPPORTED:
+                return "UNSUPPORTED"
+            if not do_result:
                 return "FAIL"
 
             if reset_type == "ForceOff":
@@ -243,7 +265,7 @@ class PowerControlTest(BmcTestBase):
             return True
         if state != "On":
             CommonFunction.print_log("INFO", f"服务器当前 {state}，发送 On 开机")
-            if not self._do_reset("On"):
+            if self._do_reset("On") is not True:
                 return False
             if not self._wait_for_power_state("On"):
                 return False
@@ -307,6 +329,12 @@ class PowerControlTest(BmcTestBase):
         else:
             failed = [rt for rt, r in result_list if r == "FAIL"]
             CommonFunction.print_log("ERROR", f"以下电源操作测试失败：{failed}")
+        unsupported = [rt for rt, r in result_list if r == "UNSUPPORTED"]
+        if unsupported:
+            CommonFunction.print_log(
+                "WARNING",
+                f"以下 ResetType BMC 不支持（已跳过/未执行）：{unsupported}"
+            )
 
         test.print_log("INFO", f"{self.TEST_NAME}测试完成，结果：{overall}")
 
