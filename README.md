@@ -195,6 +195,12 @@ python3 -m bmc.bmc_runner -i <bmc_ip> -u <username> -p <password>
 | `--nostress` | 屏蔽 stress 压测类脚本（压测默认耗时 12h，日常验证建议加此参数） | `--nostress` |
 | `--skip-no-gpu` | 被测机型无 GPU（如通算/存储机型），跳过 GPU 检查用例 | `--skip-no-gpu` |
 | `--skip-no-storage` | 被测机型无存储卡（如通算/GPU 机型），跳过存储检查用例 | `--skip-no-storage` |
+| `--require-capability` | 测试配置明确要求的可选能力；即使 BMC 未发布对应链接也执行测试 | `--require-capability NtpService,SyslogService` |
+
+Runner 会从 ServiceRoot、Manager、标准资源、Actions 和 OEM 链接发现可选能力。
+未发布的 NTP/Syslog/KVM/LLDP/DNS/VNC/Firewall/Security/SOL OEM 接口会记录为
+`SKIPPED`，原因标记为 `UNSUPPORTED`；已经发布但访问失败的接口仍判定为 `FAIL`。
+Runner 不会根据厂商名称猜测或拼接 OEM URI。
 
 支持的 suite 分组（见 [`conf/bmc/bmc_runner_suites.json`](conf/bmc/bmc_runner_suites.json)）：
 `chassis` / `systems` / `managers` / `account` / `session` / `update` / `protocol` / `ipmi` / `web` / `event` / `stress`

@@ -26,6 +26,15 @@ import sys
 import traceback
 from datetime import datetime
 
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+
+from func.bmc_capabilities import (
+    CapabilityInventory,
+    OPTIONAL_SCRIPT_CAPABILITIES,
+    discover_manager_capabilities,
+    partition_optional_scripts,
+)
+
 # ─────────────────────────────────────────────
 # 常量
 # ─────────────────────────────────────────────
@@ -635,6 +644,11 @@ def main():
                          help='被测机型无 GPU（如通算/存储机型），跳过 systems_006_gpu_check')
     parser.add_argument('--skip-no-storage', action='store_true',
                          help='被测机型无存储卡（如通算/GPU 机型），跳过 systems_003a/003b 存储检查用例')
+    parser.add_argument(
+        '--require-capability',
+        default='',
+        help='测试配置明确要求的可选能力，逗号分隔，如 NtpService,SyslogService',
+    )
     args = parser.parse_args()
 
     conf = load_suite_conf()
@@ -681,6 +695,46 @@ def main():
                 continue
             filtered.append((suite, script))
         scripts_to_run = filtered
+
+    # Optional OEM interfaces run only when advertised. Discovery follows
+    # ServiceRoot/Manager links and never guesses a vendor-specific URI.
+    optional_selected = any(
+        script in OPTIONAL_SCRIPT_CAPABILITIES for _suite, script in scripts_to_run
+    )
+    if optional_selected:
+        try:
+            from redfish_sdk import RedfishClient
+            capability_inventory = discover_manager_capabilities(
+                RedfishClient,
+                args.bmc_ip,
+                args.user_name,
+                args.password,
+            )
+        except Exception as exc:
+            capability_inventory = CapabilityInventory(
+                complete=False,
+                diagnostics=[f'{type(exc).__name__}: {str(exc)[:200]}'],
+            )
+
+        required_capabilities = list(conf.get('required_capabilities', []))
+        required_capabilities.extend(
+            item.strip()
+            for item in args.require_capability.split(',')
+            if item.strip()
+        )
+        scripts_to_run, capability_skips = partition_optional_scripts(
+            scripts_to_run,
+            capability_inventory,
+            required_capabilities,
+        )
+        skipped_records.extend(capability_skips)
+
+        if not capability_inventory.complete:
+            details = '; '.join(capability_inventory.diagnostics)
+            cprint(
+                f'  Capability discovery incomplete; optional tests will run: {details}',
+                C_YELLOW,
+            )
 
     if not scripts_to_run and not skipped_records:
         print('没有需要执行的脚本，退出。')
