@@ -3,6 +3,12 @@
     "TestName": "BMC操作日志服务检查",
     "TestNum": "Redfish_Managers_004b",
     "LogBasename": "managers_004b_operatelog_check",
-    "TestTime": 60
+    "TestTime": 60,
+    "LogServiceRequirement": {
+      "purposes": ["Operations"],
+      "preferred_ids": ["OperateLog", "OperationLog", "EventLog"],
+      "fallback_keywords": ["operate", "operation", "management history", "event log"],
+      "require_entries": true
+    }
   }
 }

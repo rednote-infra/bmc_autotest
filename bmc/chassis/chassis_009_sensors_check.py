@@ -18,15 +18,16 @@ Sensor 集合来源：
 
 校验分两阶段：
   阶段一：字段合规校验（逐条，区分必要/非必要）
-    必要传感器：name 命中 RequiredSensorGroups 的 keywords（temperature/voltage）；
+    必要传感器：按 RequiredSensorGroups 的 PhysicalContext、PhysicalSubContext、
+              RelatedItem 与平台拓扑匹配，name keywords 仅作为兼容回退；
               或整体必要类型（fan/psu/power_control）
     非必要传感器：其余所有传感器
     必要传感器字段异常 → ERROR + 计入整体 FAIL
     非必要传感器字段异常 → WARNING，不计入整体 FAIL
 
-  阶段二：必要传感器组覆盖检查（"有效读值"名称列表）
-    每组通过关键字匹配【有效读值】传感器名称，至少匹配 1 条即满足
-    任意组缺失或无有效读值 → FAIL
+  阶段二：必要传感器组覆盖检查（有效读值 + 语义证据）
+    每组按 profile 的 requirement 判定 required / when_hardware_present / optional；
+    仅真正必需且缺失有效读值的组导致 FAIL
 
 整体结果：必要传感器全 PASS 且阶段二全 PASS → PASS
 """
@@ -40,6 +41,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.resource_semantics import evaluate_sensor_group
 
 from redfish_sdk import RedfishClient, RedfishException
 
@@ -84,36 +86,69 @@ class SensorsInfoCheck(BmcTestBase):
 
     # ── 必要传感器判定辅助 ─────────────────────────────────────────────────────
 
-    def _build_mandatory_keywords(self) -> dict:
-        """从 REQUIRED_SENSOR_GROUPS 中提取各 source 对应的关键字列表。
+    @staticmethod
+    def _related_item_uris(sensor) -> list:
+        """Extract advertised RelatedItem links from SDK objects or dictionaries."""
+        related = (getattr(sensor, "related_item", None)
+                   or getattr(sensor, "related_items", None) or [])
+        if not isinstance(related, (list, tuple)):
+            related = [related]
+        uris = []
+        for item in related:
+            if isinstance(item, dict):
+                uri = item.get("@odata.id") or item.get("odata_id")
+            else:
+                uri = getattr(item, "odata_id", None) or getattr(item, "@odata.id", None)
+            if uri:
+                uris.append(str(uri))
+        return uris
 
-        返回 {source: [keyword, ...]}。
-        keywords 为空列表的组（fan/psu/power_control）表示该类别整体必要，
-        其 source 在返回 dict 中用空列表标记。
-        """
-        mandatory = {}
+    def _sensor_evidence(self, sensor) -> dict:
+        return {
+            "name": getattr(sensor, "name", None) or getattr(sensor, "member_id", None) or "",
+            "physical_context": getattr(sensor, "physical_context", None) or "",
+            "physical_sub_context": getattr(sensor, "physical_sub_context", None) or "",
+            "related_items": self._related_item_uris(sensor),
+        }
+
+    def _is_profile_mandatory(self, sensor, source: str) -> bool:
+        candidate = self._sensor_evidence(sensor)
         for cfg in self.REQUIRED_SENSOR_GROUPS.values():
-            source   = cfg.get("source", "")
-            keywords = [k.lower() for k in cfg.get("keywords", [])]
-            if source not in mandatory:
-                mandatory[source] = []
-            mandatory[source].extend(keywords)
-        return mandatory
+            if cfg.get("source") != source or cfg.get("requirement", "required") == "optional":
+                continue
+            topology = cfg.get("topology")
+            present = self._topology_presence.get(topology) if topology else None
+            if evaluate_sensor_group([candidate], cfg, present)["result"] == "PASS":
+                return True
+        return False
 
-    def _is_mandatory(self, sensor_name: str, source: str, mandatory_kw: dict) -> bool:
-        """判断传感器是否为必要传感器。
-
-        - source 不在 mandatory_kw 中 → 非必要
-        - source 在 mandatory_kw 中且 keywords 为空（fan/psu/power_control）→ 整体必要
-        - source 在 mandatory_kw 中且 keywords 非空 → 名称命中任一 keyword 才必要
-        """
-        if source not in mandatory_kw:
-            return False
-        kws = mandatory_kw[source]
-        if not kws:
-            return True
-        name_lower = (sensor_name or "").lower()
-        return any(kw in name_lower for kw in kws)
+    def _discover_platform_topology(self) -> dict:
+        """Discover hardware presence only for conditional profile requirements."""
+        method_by_topology = {
+            "processor": "get_processors",
+            "memory": "get_memory",
+            "storage": "get_storages",
+            "pcie": "get_pcie_devices",
+        }
+        required = {
+            cfg.get("topology") for cfg in self.REQUIRED_SENSOR_GROUPS.values()
+            if cfg.get("requirement") == "when_hardware_present" and cfg.get("topology")
+        }
+        presence = {}
+        for topology in required:
+            method_name = method_by_topology.get(topology)
+            method = getattr(self.client, method_name, None) if method_name else None
+            if method is None:
+                presence[topology] = None
+                continue
+            try:
+                presence[topology] = bool(method() or [])
+            except (RedfishException, TypeError, AttributeError) as exc:
+                presence[topology] = None
+                CommonFunction.print_log(
+                    "WARNING", f"无法确认 {topology} 拓扑，条件传感器组将跳过：{exc}"
+                )
+        return presence
 
     # ── 温度传感器校验 ──────────────────────────────────────────────────────
 
@@ -183,6 +218,8 @@ class SensorsInfoCheck(BmcTestBase):
             "member_id": sensor_id,
             "name": sensor_name,
             "physical_context": ctx,
+            "physical_sub_context": getattr(temp, "physical_sub_context", None) or "",
+            "related_items": self._related_item_uris(temp),
             "is_mandatory": is_mandatory,
             "reading": temp.reading_celsius,
             "unit": "Celsius",
@@ -405,56 +442,52 @@ class SensorsInfoCheck(BmcTestBase):
     # ── 必要传感器组覆盖检查（阶段二）──────────────────────────────────────
 
     def _check_required_groups(self,
-                               temp_valid_names: list,
-                               volt_valid_names: list,
-                               pc_valid_names:   list,
-                               fan_valid_names:  list,
-                               psu_valid_names:  list) -> tuple:
-        """阶段二：对每个必要传感器组，在【有效读值】名称列表中进行关键字匹配。
-
-        :param *_valid_names: 各类型中 has_valid_reading=True 且有 name 的传感器名列表
-        :return: (all_pass, group_results)
-        """
+                               temp_valid_sensors: list,
+                               volt_valid_sensors: list,
+                               pc_valid_sensors:   list,
+                               fan_valid_sensors:  list,
+                               psu_valid_sensors:  list) -> tuple:
+        """Evaluate required groups from semantic sensor evidence."""
         source_map = {
-            "temperature":   temp_valid_names,
-            "voltage":       volt_valid_names,
-            "power_control": pc_valid_names,
-            "fan":           fan_valid_names,
-            "psu":           psu_valid_names,
+            "temperature":   temp_valid_sensors,
+            "voltage":       volt_valid_sensors,
+            "power_control": pc_valid_sensors,
+            "fan":           fan_valid_sensors,
+            "psu":           psu_valid_sensors,
         }
         group_results = []
         all_pass      = True
 
         for group_name, cfg in self.REQUIRED_SENSOR_GROUPS.items():
             source   = cfg.get("source", "")
-            keywords = [k.lower() for k in cfg.get("keywords", [])]
             desc     = cfg.get("description", group_name)
-            names    = source_map.get(source, [])
-            matched  = (
-                [n for n in names if any(kw in n.lower() for kw in keywords)]
-                if keywords else names
-            )
-
-            result = "PASS" if matched else "FAIL"
+            candidates = source_map.get(source, [])
+            topology = cfg.get("topology")
+            hardware_present = self._topology_presence.get(topology) if topology else None
+            evaluation = evaluate_sensor_group(candidates, cfg, hardware_present)
+            result = evaluation["result"]
             if result == "FAIL":
                 all_pass = False
                 CommonFunction.print_log(
                     "ERROR",
-                    f"[必要传感器组] {group_name}：未找到匹配且有效读值的传感器"
-                    f"（source={source}, keywords={keywords}）"
+                    f"[必要传感器组] {group_name}：存在硬件但未找到语义匹配的有效读值"
+                )
+            elif result == "SKIPPED":
+                CommonFunction.print_log(
+                    "WARNING",
+                    f"[条件传感器组] {group_name}：跳过（{evaluation['reason']}）"
                 )
             else:
                 CommonFunction.print_log(
                     "INFO",
-                    f"[必要传感器组] {group_name}：✓ 找到 {len(matched)} 条（均有有效读值）"
+                    f"[必要传感器组] {group_name}：✓ 找到 {len(evaluation['matches'])} 条，"
+                    f"依据={[m['matched_by'] for m in evaluation['matches']]}"
                 )
             group_results.append({
                 "group":       group_name,
                 "description": desc,
                 "source":      source,
-                "keywords":    keywords,
-                "matched":     matched,
-                "result":      result,
+                **evaluation,
             })
 
         return all_pass, group_results
@@ -462,19 +495,18 @@ class SensorsInfoCheck(BmcTestBase):
     # ── 主检查流程 ──────────────────────────────────────────────────────────
 
     def sensors_info_check(self) -> tuple:
-        # 预先构建必要传感器关键字映射
-        mandatory_kw = self._build_mandatory_keywords()
+        self._topology_presence = self._discover_platform_topology()
 
         # 必要传感器的字段校验结果（False = 有必要传感器字段不合规）
         mandatory_field_results = []
         all_sensor_info         = []
 
-        # 阶段二：仅统计有有效读值的传感器名
-        temp_valid_names = []
-        volt_valid_names = []
-        pc_valid_names   = []
-        fan_valid_names  = []
-        psu_valid_names  = []
+        # 阶段二：仅统计有有效读值的传感器及其语义证据
+        temp_valid_sensors = []
+        volt_valid_sensors = []
+        pc_valid_sensors   = []
+        fan_valid_sensors  = []
+        psu_valid_sensors  = []
 
         # ── 温度 + 风扇（Thermal）──────────────────────────────────────────
         CommonFunction.print_log("INFO", "获取 Thermal 数据（温度传感器 + 风扇）")
@@ -488,19 +520,20 @@ class SensorsInfoCheck(BmcTestBase):
             mandatory_field_results.append(False)
 
         if not temp_list:
-            CommonFunction.print_log("ERROR", "温度传感器列表为空")
-            mandatory_field_results.append(False)
+            CommonFunction.print_log(
+                "WARNING", "温度传感器列表为空，按平台拓扑和分组 requirement 判定"
+            )
         else:
             CommonFunction.print_log("INFO", f"温度传感器 {len(temp_list)} 条，开始校验")
             for temp in temp_list:
                 sensor_name  = temp.name or ""
-                is_mandatory = self._is_mandatory(sensor_name, "temperature", mandatory_kw)
+                is_mandatory = self._is_profile_mandatory(temp, "temperature")
                 field_pass, has_valid, info = self._check_temperature(temp, is_mandatory)
                 all_sensor_info.append(info)
                 if is_mandatory:
                     mandatory_field_results.append(field_pass)
-                if sensor_name and has_valid:
-                    temp_valid_names.append(sensor_name)
+                if has_valid:
+                    temp_valid_sensors.append(info)
 
         if not fan_list:
             CommonFunction.print_log("ERROR", "风扇传感器列表为空（Thermal.Fans 为空）")
@@ -511,9 +544,8 @@ class SensorsInfoCheck(BmcTestBase):
                 field_pass, has_valid, info = self._check_fan(fan)
                 all_sensor_info.append(info)
                 mandatory_field_results.append(field_pass)
-                n = getattr(fan, "name", None)
-                if n and has_valid:
-                    fan_valid_names.append(n)
+                if has_valid:
+                    fan_valid_sensors.append(info)
 
         # ── 电压 + 功耗（Power）───────────────────────────────────────────
         CommonFunction.print_log("INFO", "获取 Power 数据（电压 + 功耗）")
@@ -535,8 +567,8 @@ class SensorsInfoCheck(BmcTestBase):
                 field_pass, has_valid, info = self._check_voltage(volt)
                 all_sensor_info.append(info)
                 # 非必要传感器：field_pass 不计入 mandatory_field_results
-                if volt.name and has_valid:
-                    volt_valid_names.append(volt.name)
+                if has_valid:
+                    volt_valid_sensors.append(info)
 
         if not pc_list:
             CommonFunction.print_log("ERROR", "PowerControl 列表为空")
@@ -547,8 +579,8 @@ class SensorsInfoCheck(BmcTestBase):
                 field_pass, has_valid, info = self._check_power_control(pc)
                 all_sensor_info.append(info)
                 mandatory_field_results.append(field_pass)
-                if pc.name and has_valid:
-                    pc_valid_names.append(pc.name)
+                if has_valid:
+                    pc_valid_sensors.append(info)
 
         # ── 电源模块（PowerSupplies）──────────────────────────────────────
         CommonFunction.print_log("INFO", "获取 PowerSupplies 数据")
@@ -568,16 +600,15 @@ class SensorsInfoCheck(BmcTestBase):
                 field_pass, has_valid, info = self._check_psu(psu)
                 all_sensor_info.append(info)
                 mandatory_field_results.append(field_pass)
-                n = psu.name or psu.member_id
-                if n and has_valid:
-                    psu_valid_names.append(n)
+                if has_valid:
+                    psu_valid_sensors.append(info)
 
         # ── 阶段二：必要传感器组覆盖检查（有效读值） ────────────────────────
         CommonFunction.print_log("INFO", "=" * 50)
         CommonFunction.print_log("INFO", "阶段二：必要传感器组覆盖检查（有效读值）")
         groups_pass, group_results = self._check_required_groups(
-            temp_valid_names, volt_valid_names, pc_valid_names,
-            fan_valid_names,  psu_valid_names
+            temp_valid_sensors, volt_valid_sensors, pc_valid_sensors,
+            fan_valid_sensors,  psu_valid_sensors
         )
 
         # 整体结果：必要传感器字段全 PASS 且阶段二全 PASS

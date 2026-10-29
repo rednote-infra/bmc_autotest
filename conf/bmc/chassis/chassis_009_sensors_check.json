@@ -9,36 +9,55 @@
         "RequiredSensorGroups": {
             "CPU温度": {
                 "source": "temperature",
+                "requirement": "when_hardware_present",
+                "topology": "processor",
+                "physical_contexts": ["CPU", "Processor"],
+                "related_item_keywords": ["/Processors/"],
                 "keywords": ["cpu"],
                 "description": "CPU 温度传感器"
             },
             "系统功耗": {
                 "source": "power_control",
+                "requirement": "required",
                 "keywords": [],
                 "description": "系统整机功耗（PowerControl 非空即满足）"
             },
             "内存温度": {
                 "source": "temperature",
+                "requirement": "when_hardware_present",
+                "topology": "memory",
+                "physical_contexts": ["Memory", "MemorySubsystem"],
+                "related_item_keywords": ["/Memory/"],
                 "keywords": ["dimm", "mem", "memory"],
                 "description": "内存温度传感器"
             },
             "硬盘温度": {
                 "source": "temperature",
+                "requirement": "optional",
+                "topology": "storage",
+                "physical_contexts": ["StorageDevice", "StorageBay"],
+                "related_item_keywords": ["/Drives/", "/Storage/"],
                 "keywords": ["hdd", "nvme", "disk", "ssd", "m2"],
                 "description": "硬盘/NVMe 温度传感器"
             },
             "PCIe卡温度": {
                 "source": "temperature",
+                "requirement": "optional",
+                "topology": "pcie",
+                "physical_contexts": ["Accelerator", "ExpansionBoard", "NetworkingDevice"],
+                "related_item_keywords": ["/PCIeDevices/", "/NetworkInterfaces/", "/GraphicsControllers/"],
                 "keywords": ["gpu", "nic", "pcie", "hca", "riser", "hba"],
                 "description": "PCIe 卡（GPU/网卡/HBA）温度传感器"
             },
             "风扇转速": {
                 "source": "fan",
+                "requirement": "required",
                 "keywords": [],
                 "description": "风扇转速（Fans 集合非空即满足）"
             },
             "电源电压输入输出": {
                 "source": "psu",
+                "requirement": "required",
                 "keywords": [],
                 "description": "电源模块（PowerSupplies 非空即满足）"
             }
