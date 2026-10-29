@@ -186,6 +186,17 @@ class AccountSafetyTests(unittest.TestCase):
         self.assertEqual("FAIL",
                          bmc_runner.EC_LABELS[bmc_runner.EC_RECOVERY_FAILED])
 
+    def test_destructive_suite_uses_existing_account_package(self):
+        module = bmc_runner.resolve_script_module(
+            "account_destructive",
+            "account_008b_disable_admin_negative_test",
+        )
+
+        self.assertEqual(
+            "bmc.account.account_008b_disable_admin_negative_test",
+            module,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

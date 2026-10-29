@@ -196,16 +196,21 @@ def cprint(msg, color=''):
 # ─────────────────────────────────────────────
 # 执行单条脚本
 # ─────────────────────────────────────────────
+def resolve_script_module(suite, script_name):
+    """Return the importable module for a logical suite and script."""
+    if suite and suite != 'custom':
+        package = SUITE_CONF_SUBDIR.get(suite, suite)
+        return f'bmc.{package}.{script_name}'
+    return f'bmc.{script_name}'
+
+
 def run_script(script_name, bmc_ip, username, password, timeout_sec, log_fh, suite=''):
     """执行一条脚本，返回 (exit_code, elapsed, stdout+stderr 文本)
 
     重构后脚本按 suite 分层，模块路径变为 bmc.<suite>.<script_name>。
     若 suite 为空（--only 模式）则尝试自动推断 suite，降级为 bmc.<script_name>。
     """
-    if suite and suite != 'custom':
-        module_path = f'bmc.{suite}.{script_name}'
-    else:
-        module_path = f'bmc.{script_name}'
+    module_path = resolve_script_module(suite, script_name)
     cmd = [sys.executable, '-m', module_path, '-i', bmc_ip, '-u', username, '-p', password]
     sep = '=' * 70
     header = f'\n{sep}\n>>> BEGIN {script_name}  [{datetime.now().strftime("%H:%M:%S")}]\n{sep}\n'
