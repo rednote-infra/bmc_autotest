@@ -6,12 +6,11 @@ Usage: python3 bmc/chassis_002_fans_check.py -i <bmc_ip> -u <username> -p <passw
 Update:
 2026/04/21: 新增
 
-校验策略：
-  必要字段（为空/异常 → FAIL + ERROR，计入整体结果）：
-    MemberId、Reading（>= 0）、ReadingUnits、MaxReadingRange（> 0）、Status.Health
-  非必要字段（为空或异常 → WARNING 告警，不计入整体结果）：
-    PhysicalContext、MinReadingRange、UpperThresholdCritical、UpperThresholdFatal、LowerThresholdCritical
-  INFO — 打印 MemberId / Reading / ReadingUnits / PhysicalContext 供人工存档
+Validation strategy:
+  - Standalone Fan: Id, a usable SpeedPercent reading, and Status.Health.
+  - Legacy embedded Fan: MemberId, Reading, ReadingUnits, MaxReadingRange,
+    and Status.Health.
+  - Optional schema-specific fields produce warnings only.
 
 CSV：每行一个风扇的关键信息
 JSON detail.cycle：每个风扇一条记录；summary：整体 PASS/FAIL
@@ -66,6 +65,130 @@ class FansInfoCheck(BmcTestBase):
     # ── 单个风扇校验 ─────────────────────────────────────────────────────────
 
     def _check_single_fan(self, fan) -> tuple:
+        """Dispatch validation according to the Fan resource schema."""
+        if hasattr(fan, "speed_percent") and not hasattr(fan, "member_id"):
+            return self._check_standalone_fan(fan)
+        return self._check_legacy_fan(fan)
+
+    def _check_standalone_fan(self, fan) -> tuple:
+        """Validate a standalone Fan from ``ThermalSubsystem.Fans``."""
+        resource_id = getattr(fan, "id", None)
+        fan_id = (
+            resource_id
+            or getattr(fan, "name", None)
+            or getattr(fan, "odata_id", None)
+            or "unknown"
+        )
+        all_pass = True
+
+        if not isinstance(resource_id, str) or not resource_id.strip():
+            CommonFunction.print_log(
+                "ERROR", f"[Fan] {fan_id}: Id is missing or empty"
+            )
+            all_pass = False
+        else:
+            CommonFunction.print_log("INFO", f"[Fan] {fan_id}: Id = {resource_id}")
+
+        speed = getattr(fan, "speed_percent", None)
+        raw_percent = getattr(speed, "reading", None) if speed else None
+        speed_rpm = getattr(speed, "speed_rpm", None) if speed else None
+        valid_rpm = (
+            isinstance(speed_rpm, (int, float))
+            and not isinstance(speed_rpm, bool)
+            and speed_rpm >= 0
+        )
+        valid_percent = (
+            isinstance(raw_percent, (int, float))
+            and not isinstance(raw_percent, bool)
+            and 0 <= raw_percent <= 100
+        )
+
+        if valid_rpm:
+            CommonFunction.print_log(
+                "INFO", f"[Fan] {fan_id}: SpeedPercent.SpeedRPM = {speed_rpm}"
+            )
+        if valid_percent:
+            CommonFunction.print_log(
+                "INFO", f"[Fan] {fan_id}: SpeedPercent.Reading = {raw_percent}%"
+            )
+        elif raw_percent is not None and valid_rpm:
+            CommonFunction.print_log(
+                "WARNING",
+                f"[Fan] {fan_id}: SpeedPercent.Reading = {raw_percent} is "
+                "outside 0-100; using the advertised RPM reading",
+            )
+
+        if not valid_rpm and not valid_percent:
+            CommonFunction.print_log(
+                "ERROR",
+                f"[Fan] {fan_id}: no usable SpeedRPM or SpeedPercent reading",
+            )
+            all_pass = False
+
+        rated_speed_rpm = getattr(fan, "rated_speed_rpm", None)
+        if rated_speed_rpm is None:
+            CommonFunction.print_log(
+                "WARNING", f"[Fan] {fan_id}: RatedSpeedRPM is not advertised"
+            )
+        elif not isinstance(rated_speed_rpm, (int, float)) or rated_speed_rpm <= 0:
+            CommonFunction.print_log(
+                "WARNING",
+                f"[Fan] {fan_id}: RatedSpeedRPM = {rated_speed_rpm} is not positive",
+            )
+        else:
+            CommonFunction.print_log(
+                "INFO", f"[Fan] {fan_id}: RatedSpeedRPM = {rated_speed_rpm}"
+            )
+
+        health = getattr(getattr(fan, "status", None), "health", None)
+        if health is None:
+            CommonFunction.print_log(
+                "ERROR", f"[Fan] {fan_id}: Status.Health is missing"
+            )
+            all_pass = False
+        elif health not in VALID_HEALTH:
+            CommonFunction.print_log(
+                "ERROR", f"[Fan] {fan_id}: unsupported Status.Health = {health!r}"
+            )
+            all_pass = False
+        elif health != "OK":
+            CommonFunction.print_log(
+                "ERROR", f"[Fan] {fan_id}: unhealthy Status.Health = {health!r}"
+            )
+            all_pass = False
+        else:
+            CommonFunction.print_log(
+                "INFO", f"[Fan] {fan_id}: Status.Health = OK"
+            )
+
+        physical_context = getattr(fan, "physical_context", None)
+        if not physical_context:
+            CommonFunction.print_log(
+                "WARNING", f"[Fan] {fan_id}: PhysicalContext is not advertised"
+            )
+        else:
+            CommonFunction.print_log(
+                "INFO", f"[Fan] {fan_id}: PhysicalContext = {physical_context}"
+            )
+
+        reading = speed_rpm if valid_rpm else raw_percent
+        reading_units = "RPM" if valid_rpm else "Percent"
+        return all_pass, {
+            "schema": "standalone",
+            "fan_id": str(fan_id),
+            "member_id": resource_id or "",
+            "physical_context": physical_context or "",
+            "reading": reading,
+            "reading_units": reading_units,
+            "max_reading_range": rated_speed_rpm,
+            "speed_rpm": speed_rpm if valid_rpm else None,
+            "speed_percent": raw_percent if valid_percent else None,
+            "rated_speed_rpm": rated_speed_rpm,
+            "health": health or "",
+            "check_result": "PASS" if all_pass else "FAIL",
+        }
+
+    def _check_legacy_fan(self, fan) -> tuple:
         """
         :return: (all_pass: bool, fan_info: dict)
         """
@@ -170,11 +293,16 @@ class FansInfoCheck(BmcTestBase):
             CommonFunction.print_log("INFO", f"[Fan] {fan_id}：LowerThresholdCritical = {fan.lower_threshold_critical}")
 
         fan_info = {
+            "schema":           "legacy",
+            "fan_id":           fan.member_id or fan.name or fan.odata_id or "unknown",
             "member_id":        fan.member_id or "",
             "physical_context": fan.physical_context or "",
             "reading":          fan.reading,
             "reading_units":    fan.reading_units or "",
             "max_reading_range": fan.max_reading_range,
+            "speed_rpm":        fan.reading if fan.reading_units == "RPM" else None,
+            "speed_percent":    fan.reading if fan.reading_units == "Percent" else None,
+            "rated_speed_rpm":  fan.max_reading_range,
             "health":           health or "",
             "check_result":     "PASS" if all_pass else "FAIL",
         }
