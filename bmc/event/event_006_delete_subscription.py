@@ -30,6 +30,11 @@ import traceback
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.bmc_event_test_base import BmcEventTestBase
+from func.bmc_prerequisite import (
+    PrerequisiteFailure,
+    blocked_findings,
+    subscription_member_uris,
+)
 from func.redfish_event_compat import subscription_event_types
 
 from redfish_sdk import RedfishClient, RedfishException
@@ -71,9 +76,20 @@ class Event006DeleteSubscription(BmcEventTestBase):
         findings = []
         try:
             # 记录基准状态
-            members_before = self._get_members_raw()
+            try:
+                members_before = self._get_members_raw()
+            except Exception as exc:
+                raise PrerequisiteFailure(
+                    "Event subscription discovery",
+                    f"Unable to read baseline subscriptions: {type(exc).__name__}: {exc}",
+                    ("Create subscription", "Delete subscription", "Verify deletion"),
+                ) from exc
             count_before   = len(members_before)
-            before_uris    = {m["@odata.id"] for m in members_before}
+            before_uris = subscription_member_uris(
+                members_before,
+                "Event subscription discovery",
+                ("Create subscription", "Delete subscription", "Verify deletion"),
+            )
             self.log.info(f"  创建前订阅数：{count_before}")
 
             # 前置：SDK subscribe() 创建测试订阅（v1.1.1 原生支持 http_headers）
@@ -133,8 +149,12 @@ class Event006DeleteSubscription(BmcEventTestBase):
             # 若 SDK 未给 URI，从差集获取
             if not new_uri:
                 members_after = self._get_members_raw()
-                new_uris = [m["@odata.id"] for m in members_after
-                            if m["@odata.id"] not in before_uris]
+                after_uris = subscription_member_uris(
+                    members_after,
+                    "Created subscription discovery",
+                    ("Delete subscription", "Verify deletion"),
+                )
+                new_uris = list(after_uris - before_uris)
                 if new_uris:
                     new_uri = new_uris[0]
                     self.log.info(f"  从差集获取新建 URI：{new_uri}")
@@ -166,13 +186,21 @@ class Event006DeleteSubscription(BmcEventTestBase):
             self.log.info(f"  {'✅' if restored else '❌'} 订阅数：{count_before+1} -> {count_final}（期望 {count_before}）")
 
             # 验证 URI 不再在集合中
-            final_uris   = {m["@odata.id"] for m in members_final}
+            final_uris = subscription_member_uris(
+                members_final,
+                "Deleted subscription verification",
+            )
             still_exists = new_uri in final_uris
             findings.append({"item": "已删除订阅不再出现在集合中",
                              "result": "PASS" if not still_exists else "FAIL",
                              "detail": f"URI={new_uri!r}"})
             self.log.info(f"  {'✅' if not still_exists else '❌'} 订阅已从集合删除：{not still_exists}")
 
+        except PrerequisiteFailure as failure:
+            findings = blocked_findings(failure)
+            self.log.error(
+                f"BLOCKED: {failure.prerequisite}: {failure.reason}"
+            )
         except RedfishException as e:
             findings.append({"item": "订阅删除流程", "result": "FAIL",
                              "detail": f"RedfishException: {e}"})
@@ -194,7 +222,8 @@ class Event006DeleteSubscription(BmcEventTestBase):
             self.client.close()
 
         fails = [f for f in findings if f["result"] == "FAIL"]
-        final = "PASS" if not fails else "FAIL"
+        blocked = [f for f in findings if f["result"] == "BLOCKED"]
+        final = "BLOCKED" if blocked else "PASS" if not fails else "FAIL"
         self.command_check_result = final
         self.log.info(f"最终结果：{final}（{len(findings) - len(fails)}/{len(findings)} 非FAIL）")
         self._write_result(final, findings)
@@ -205,7 +234,11 @@ if __name__ == "__main__":
     try:
         obj = Event006DeleteSubscription()
         obj.run_test()
-        exit_code = 0 if obj.command_check_result == "PASS" else 2
+        exit_code = {
+            "PASS": 0,
+            "FAIL": 2,
+            "BLOCKED": 4,
+        }.get(obj.command_check_result, 1)
     except KeyboardInterrupt:
         exit_code = 130
     except Exception as e:

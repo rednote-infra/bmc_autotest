@@ -36,6 +36,11 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.bmc_prerequisite import (
+    PrerequisiteFailure,
+    blocked_findings,
+    validate_sol_configuration,
+)
 
 from redfish_sdk import RedfishClient, RedfishException
 
@@ -83,6 +88,7 @@ class Managers023SolLogTest(BmcTestBase):
         checks = []
         detail = {}
         final  = "FAIL"
+        prerequisite_failure = None
 
         try:
             self.client = RedfishClient(
@@ -91,11 +97,9 @@ class Managers023SolLogTest(BmcTestBase):
 
             # ── 1. 查询 SOL 配置（SDK 1.3.0 类型化接口，URI 由 SDK 自动发现）──
             sol_data = self.client.get_sol_source()
-            # SerialSource/Parameters 为 OEM 扩展字段，经 extra 保留可属性访问
-            serial_source    = getattr(sol_data, "SerialSource", "") or ""
-            parameters       = getattr(sol_data, "Parameters", None) or {}
-            allowable_values = parameters.get("AllowableValues", []) \
-                               if isinstance(parameters, dict) else []
+            sol_config = validate_sol_configuration(sol_data)
+            serial_source = sol_config["SerialSource"]
+            allowable_values = sol_config["AllowableValues"]
 
             test.print_log("INFO",
                 f"SOL 配置：SerialSource={serial_source}, AllowableValues={allowable_values}")
@@ -106,17 +110,47 @@ class Managers023SolLogTest(BmcTestBase):
             checks.append(("SOL 配置查询成功", True))
             checks.append(("SerialSource 字段存在", bool(serial_source)))
 
+        except PrerequisiteFailure as failure:
+            prerequisite_failure = failure
         except RedfishException as e:
-            test.print_log("ERROR", f"Redfish 查询 SOL 配置失败：{e}")
-            checks.append(("SOL 配置查询成功", False))
+            prerequisite_failure = PrerequisiteFailure(
+                "SOL configuration discovery",
+                f"Redfish query failed: {e}",
+                ("SOL session activation", "SOL log capture", "SOL deactivation"),
+            )
         except Exception as e:
-            test.print_log("ERROR", f"Redfish 异常：{e}")
-            checks.append(("SOL 配置查询成功", False))
+            prerequisite_failure = PrerequisiteFailure(
+                "SOL configuration discovery",
+                f"Unexpected query failure: {type(e).__name__}: {e}",
+                ("SOL session activation", "SOL log capture", "SOL deactivation"),
+            )
         finally:
             try:
                 self.client.close()
             except Exception:
                 pass
+
+        if prerequisite_failure:
+            findings = blocked_findings(prerequisite_failure)
+            detail["prerequisite_failure"] = prerequisite_failure.to_dict()
+            detail["checks"] = findings
+            test.print_log(
+                "ERROR",
+                f"BLOCKED: {prerequisite_failure.prerequisite}: "
+                f"{prerequisite_failure.reason}",
+            )
+            test.add_key_value_to_json(
+                self.result_json_path, "detail.cycle", value=detail
+            )
+            test.add_key_value_to_json(
+                self.result_json_path,
+                "summary",
+                value={"metrics": self.TEST_NAME, "value": "BLOCKED"},
+            )
+            with open(self.result_csv_path, "a", encoding="utf-8") as f:
+                f.write(f"{self.TEST_NUM},BLOCKED\n")
+            self.command_check_result = "BLOCKED"
+            return
 
         # ── 2. ipmitool sol activate + 采集日志 ──────────────────────────
         # 先确保 SOL 没有残留连接
@@ -219,7 +253,11 @@ if __name__ == "__main__":
     try:
         obj = Managers023SolLogTest("Managers023SolLogTest")
         obj.run_test()
-        exit_code = 0 if obj.command_check_result == "PASS" else 2
+        exit_code = {
+            "PASS": 0,
+            "FAIL": 2,
+            "BLOCKED": 4,
+        }.get(obj.command_check_result, 1)
     except KeyboardInterrupt:
         exit_code = 130
     except Exception as e:
