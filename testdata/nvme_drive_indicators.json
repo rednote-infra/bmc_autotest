@@ -1,0 +1,34 @@
+{
+  "ModernOnly": {
+    "@odata.id": "/redfish/v1/Chassis/Self/Drives/NVMe0",
+    "Id": "NVMe0",
+    "Name": "NVMe 0",
+    "Protocol": "NVMe",
+    "MediaType": "SSD",
+    "LocationIndicatorActive": false
+  },
+  "LegacyOnly": {
+    "@odata.id": "/redfish/v1/Chassis/Self/Drives/NVMe1",
+    "Id": "NVMe1",
+    "Name": "NVMe 1",
+    "Protocol": "NVMe",
+    "MediaType": "SSD",
+    "IndicatorLED": "Off"
+  },
+  "Both": {
+    "@odata.id": "/redfish/v1/Chassis/Self/Drives/NVMe2",
+    "Id": "NVMe2",
+    "Name": "NVMe 2",
+    "Protocol": "NVMe",
+    "MediaType": "SSD",
+    "LocationIndicatorActive": false,
+    "IndicatorLED": "Off"
+  },
+  "Unsupported": {
+    "@odata.id": "/redfish/v1/Systems/Self/Storage/StorageUnit/Drives/Namespace",
+    "Id": "Namespace",
+    "Name": "NVMe namespace",
+    "Protocol": "NVMe",
+    "MediaType": "SSD"
+  }
+}
