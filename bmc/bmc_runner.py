@@ -41,7 +41,12 @@ EC_FAIL    = 2
 EC_ERROR   = 1
 EC_TIMEOUT = -1
 EC_SKIP    = 3
-EC_LABELS  = {0: 'PASS', 2: 'FAIL', 1: 'ERROR', -1: 'TIMEOUT', 130: 'INTERRUPTED', 3: 'SKIPPED'}
+EC_BLOCKED = 4
+EC_RECOVERY_FAILED = 5
+EC_LABELS  = {
+    0: 'PASS', 2: 'FAIL', 1: 'ERROR', -1: 'TIMEOUT', 130: 'INTERRUPTED',
+    3: 'SKIPPED', 4: 'BLOCKED', 5: 'FAIL',
+}
 
 # ANSI 颜色（终端输出）
 C_GREEN  = '\033[32m'
@@ -51,7 +56,10 @@ C_CYAN   = '\033[36m'
 C_RESET  = '\033[0m'
 C_BOLD   = '\033[1m'
 
-DEFAULT_SUITE_ORDER = ['chassis', 'systems', 'managers', 'account', 'session', 'update', 'protocol', 'ipmi', 'web', 'event', 'stress']
+DEFAULT_SUITE_ORDER = [
+    'chassis', 'systems', 'managers', 'account', 'session', 'update',
+    'protocol', 'ipmi', 'web', 'event', 'stress', 'account_destructive',
+]
 
 # ─────────────────────────────────────────────
 # 机型差异用例跳过机制（issue/9）
@@ -74,6 +82,7 @@ SUITE_CONF_SUBDIR = {
     'systems':  'systems',
     'managers': 'managers',
     'account':  'account',
+    'account_destructive': 'account',
     'session':  'session',
     'update':   'update',
     'event':    'event',
@@ -187,16 +196,21 @@ def cprint(msg, color=''):
 # ─────────────────────────────────────────────
 # 执行单条脚本
 # ─────────────────────────────────────────────
+def resolve_script_module(suite, script_name):
+    """Return the importable module for a logical suite and script."""
+    if suite and suite != 'custom':
+        package = SUITE_CONF_SUBDIR.get(suite, suite)
+        return f'bmc.{package}.{script_name}'
+    return f'bmc.{script_name}'
+
+
 def run_script(script_name, bmc_ip, username, password, timeout_sec, log_fh, suite=''):
     """执行一条脚本，返回 (exit_code, elapsed, stdout+stderr 文本)
 
     重构后脚本按 suite 分层，模块路径变为 bmc.<suite>.<script_name>。
     若 suite 为空（--only 模式）则尝试自动推断 suite，降级为 bmc.<script_name>。
     """
-    if suite and suite != 'custom':
-        module_path = f'bmc.{suite}.{script_name}'
-    else:
-        module_path = f'bmc.{script_name}'
+    module_path = resolve_script_module(suite, script_name)
     cmd = [sys.executable, '-m', module_path, '-i', bmc_ip, '-u', username, '-p', password]
     sep = '=' * 70
     header = f'\n{sep}\n>>> BEGIN {script_name}  [{datetime.now().strftime("%H:%M:%S")}]\n{sep}\n'
@@ -259,10 +273,11 @@ def run_script(script_name, bmc_ip, username, password, timeout_sec, log_fh, sui
 # ─────────────────────────────────────────────
 # 报告生成
 # ─────────────────────────────────────────────
-RESULT_ICON = {'PASS': '✅', 'FAIL': '❌', 'ERROR': '⚠️', 'TIMEOUT': '⏱️', 'INTERRUPTED': '🛑', 'SKIPPED': '⏭️', '?': '❓'}
+RESULT_ICON = {'PASS': '✅', 'FAIL': '❌', 'ERROR': '⚠️', 'TIMEOUT': '⏱️', 'INTERRUPTED': '🛑', 'SKIPPED': '⏭️', 'BLOCKED': '🚧', '?': '❓'}
 RESULT_COLOR_HTML = {
     'PASS': '#52c41a', 'FAIL': '#ff4d4f', 'ERROR': '#fa8c16',
-    'TIMEOUT': '#faad14', 'INTERRUPTED': '#722ed1', 'SKIPPED': '#8c8c8c', '?': '#8c8c8c',
+    'TIMEOUT': '#faad14', 'INTERRUPTED': '#722ed1', 'SKIPPED': '#8c8c8c',
+    'BLOCKED': '#1677ff', '?': '#8c8c8c',
 }
 
 def _suite_stats(records, suite_order):
@@ -272,7 +287,7 @@ def _suite_stats(records, suite_order):
         s = r['suite']
         if s not in suite_map:
             suite_map[s] = {'total': 0, 'PASS': 0, 'FAIL': 0, 'ERROR': 0,
-                            'TIMEOUT': 0, 'SKIPPED': 0, 'WARN_PASS': 0}
+                            'TIMEOUT': 0, 'SKIPPED': 0, 'BLOCKED': 0, 'WARN_PASS': 0}
         suite_map[s]['total'] += 1
         res = r['result']
         suite_map[s][res] = suite_map[s].get(res, 0) + 1
@@ -289,22 +304,23 @@ def generate_markdown(records, meta, out_path):
     n_err    = sum(1 for r in records if r['result'] in ('ERROR', 'TIMEOUT'))
     n_wp     = sum(1 for r in records if r['result'] == 'PASS' and r.get('has_warning'))
     n_skip   = sum(1 for r in records if r['result'] == 'SKIPPED')
+    n_blocked = sum(1 for r in records if r['result'] == 'BLOCKED')
     suite_stats = _suite_stats(records, meta['suite_order'])
 
     lines = []
     lines.append(f'# BMC 自动化测试报告\n')
     lines.append(f'- **目标 BMC**：{bmc_ip}')
     lines.append(f'- **执行时间**：{ts}')
-    lines.append(f'- **总计**：{total} 条　|　✅ PASS: {n_pass}　|　❌ FAIL: {n_fail}　|　⚠️ ERROR/TIMEOUT: {n_err}　|　🔔 PASS含WARNING: {n_wp}　|　⏭️ 已跳过: {n_skip}')
+    lines.append(f'- **总计**：{total} 条　|　✅ PASS: {n_pass}　|　❌ FAIL: {n_fail}　|　⚠️ ERROR/TIMEOUT: {n_err}　|　🚧 BLOCKED: {n_blocked}　|　🔔 PASS含WARNING: {n_wp}　|　⏭️ 已跳过: {n_skip}')
     lines.append('')
 
     # 分组汇总表
     lines.append('## 分组汇总\n')
-    lines.append('| 分组 | 总数 | PASS | FAIL | ERROR/TO | PASS含WARNING | 已跳过 |')
-    lines.append('|:---:|:---:|:---:|:---:|:---:|:---:|:---:|')
+    lines.append('| 分组 | 总数 | PASS | FAIL | ERROR/TO | BLOCKED | PASS含WARNING | 已跳过 |')
+    lines.append('|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|')
     for suite, st in suite_stats:
         err_to = st.get('ERROR', 0) + st.get('TIMEOUT', 0)
-        lines.append(f'| {suite} | {st["total"]} | {st["PASS"]} | {st["FAIL"]} | {err_to} | {st["WARN_PASS"]} | {st.get("SKIPPED", 0)} |')
+        lines.append(f'| {suite} | {st["total"]} | {st["PASS"]} | {st["FAIL"]} | {err_to} | {st.get("BLOCKED", 0)} | {st["WARN_PASS"]} | {st.get("SKIPPED", 0)} |')
     lines.append('')
 
     # ⏭️ 已跳过明细（机型差异）
@@ -331,7 +347,7 @@ def generate_markdown(records, meta, out_path):
             lines.append('')
 
     # ❌ FAIL / ERROR 详情（含 ERROR 日志）
-    failed = [r for r in records if r['result'] in ('FAIL', 'ERROR', 'TIMEOUT')]
+    failed = [r for r in records if r['result'] in ('FAIL', 'ERROR', 'TIMEOUT', 'BLOCKED')]
     if failed:
         lines.append('## ❌ 失败/异常详情\n')
         for r in failed:
@@ -368,6 +384,7 @@ def generate_html(records, meta, out_path):
     n_err  = sum(1 for r in records if r['result'] in ('ERROR', 'TIMEOUT'))
     n_wp   = sum(1 for r in records if r['result'] == 'PASS' and r.get('has_warning'))
     n_skip = sum(1 for r in records if r['result'] == 'SKIPPED')
+    n_blocked = sum(1 for r in records if r['result'] == 'BLOCKED')
     suite_stats = _suite_stats(records, meta['suite_order'])
 
     def esc(s):
@@ -381,6 +398,7 @@ def generate_html(records, meta, out_path):
             f'<td style="color:#52c41a">{st["PASS"]}</td>'
             f'<td style="color:#ff4d4f">{st["FAIL"]}</td>'
             f'<td style="color:#fa8c16">{err_to}</td>'
+            f'<td style="color:#1677ff">{st.get("BLOCKED", 0)}</td>'
             f'<td style="color:#faad14">{st["WARN_PASS"]}</td>'
             f'<td style="color:#8c8c8c">{st.get("SKIPPED", 0)}</td></tr>\n'
         )
@@ -407,7 +425,7 @@ def generate_html(records, meta, out_path):
 
     fail_section = ''
     for r in records:
-        if r['result'] in ('FAIL', 'ERROR', 'TIMEOUT'):
+        if r['result'] in ('FAIL', 'ERROR', 'TIMEOUT', 'BLOCKED'):
             color = RESULT_COLOR_HTML.get(r['result'], '#8c8c8c')
             elines = ''.join(f'<div class="log-line err">{esc(e)}</div>' for e in r.get('error_lines', [])[:15])
             fail_section += f'''
@@ -488,13 +506,14 @@ def generate_html(records, meta, out_path):
     <div class="card"><div class="num" style="color:#52c41a">{n_pass}</div><div class="label">✅ PASS</div></div>
     <div class="card"><div class="num" style="color:#ff4d4f">{n_fail}</div><div class="label">❌ FAIL</div></div>
     <div class="card"><div class="num" style="color:#fa8c16">{n_err}</div><div class="label">⚠️ ERROR/TO</div></div>
+    <div class="card"><div class="num" style="color:#1677ff">{n_blocked}</div><div class="label">🚧 BLOCKED</div></div>
     <div class="card"><div class="num" style="color:#faad14">{n_wp}</div><div class="label">🔔 PASS含WARNING</div></div>
     <div class="card"><div class="num" style="color:#8c8c8c">{n_skip}</div><div class="label">⏭️ 已跳过</div></div>
   </div>
 
   <h2>分组汇总</h2>
   <table>
-    <tr><th>分组</th><th>总数</th><th>PASS</th><th>FAIL</th><th>ERROR/TIMEOUT</th><th>PASS含WARNING</th><th>已跳过</th></tr>
+    <tr><th>分组</th><th>总数</th><th>PASS</th><th>FAIL</th><th>ERROR/TIMEOUT</th><th>BLOCKED</th><th>PASS含WARNING</th><th>已跳过</th></tr>
     {rows_suite}
   </table>
 
@@ -538,17 +557,20 @@ def generate_excel(records, meta, out_path):
         n_err  = sum(1 for r in records if r['result'] in ('ERROR', 'TIMEOUT'))
         n_wp   = sum(1 for r in records if r['result'] == 'PASS' and r.get('has_warning'))
         n_skip = sum(1 for r in records if r['result'] == 'SKIPPED')
+        n_blocked = sum(1 for r in records if r['result'] == 'BLOCKED')
 
         for label, val in [('总计', total), ('PASS', n_pass), ('FAIL', n_fail),
-                            ('ERROR/TIMEOUT', n_err), ('PASS含WARNING', n_wp), ('已跳过', n_skip)]:
+                            ('ERROR/TIMEOUT', n_err), ('BLOCKED', n_blocked),
+                            ('PASS含WARNING', n_wp), ('已跳过', n_skip)]:
             ws1.append([label, val])
         ws1.append([])
 
         suite_stats = _suite_stats(records, meta['suite_order'])
-        ws1.append(['分组', '总数', 'PASS', 'FAIL', 'ERROR/TIMEOUT', 'PASS含WARNING', '已跳过'])
+        ws1.append(['分组', '总数', 'PASS', 'FAIL', 'ERROR/TIMEOUT', 'BLOCKED', 'PASS含WARNING', '已跳过'])
         for suite, st in suite_stats:
             err_to = st.get('ERROR', 0) + st.get('TIMEOUT', 0)
-            ws1.append([suite, st['total'], st['PASS'], st['FAIL'], err_to, st['WARN_PASS'], st.get('SKIPPED', 0)])
+            ws1.append([suite, st['total'], st['PASS'], st['FAIL'], err_to,
+                        st.get('BLOCKED', 0), st['WARN_PASS'], st.get('SKIPPED', 0)])
 
         # ── Sheet2: 完整结果 ──
         ws2 = wb.create_sheet('测试结果')
@@ -559,6 +581,7 @@ def generate_excel(records, meta, out_path):
             'PASS':    'C6EFCE', 'FAIL':    'FFC7CE',
             'ERROR':   'FFEB9C', 'TIMEOUT': 'FFEB9C',
             'SKIPPED': 'E0E0E0',
+            'BLOCKED': 'D6E4FF',
         }
         thin = Side(style='thin', color='DDDDDD')
         border = Border(left=thin, right=thin, top=thin, bottom=thin)
@@ -601,7 +624,7 @@ def generate_excel(records, meta, out_path):
         ws4 = wb.create_sheet('FAIL详情')
         ws4.append(['脚本名', 'TestNum', '测试名称', '结果', '耗时(s)', 'ERROR日志'])
         for r in records:
-            if r['result'] in ('FAIL', 'ERROR', 'TIMEOUT'):
+            if r['result'] in ('FAIL', 'ERROR', 'TIMEOUT', 'BLOCKED'):
                 elines = '\n'.join(r.get('error_lines', [])[:15])
                 ws4.append([r['script'], r['test_num'], r['test_name'], r['result'],
                              round(r['elapsed'], 1), elines])
@@ -656,9 +679,7 @@ def main():
         if args.suite:
             suite_names = [s.strip() for s in args.suite.split(',') if s.strip()]
         else:
-            suite_names = [s for s in DEFAULT_SUITE_ORDER if s != 'stress']
-            if not args.nostress:
-                suite_names.append('stress')
+            suite_names = list(DEFAULT_SUITE_ORDER)
 
         if args.nostress and 'stress' in suite_names:
             suite_names.remove('stress')
@@ -710,6 +731,7 @@ def main():
 
     records = []
     suite_order_seen = []
+    recovery_failed = False
 
     with open(log_path, 'w', encoding='utf-8') as log_fh:
         log_fh.write(f'BMC Runner 开始 | BMC={args.bmc_ip} | 时间={datetime.now()}\n\n')
@@ -723,6 +745,18 @@ def main():
 
             cprint(f'\n[{idx:03d}/{len(scripts_to_run)}] {suite}/{script_name}', C_CYAN)
 
+            if recovery_failed:
+                reason = 'A destructive account test could not restore active credentials'
+                cprint(f'  → BLOCKED  {reason}', C_YELLOW)
+                records.append({
+                    'suite': suite, 'script': script_name,
+                    'test_num': meta_info['TestNum'], 'test_name': meta_info['TestName'],
+                    'result': 'BLOCKED', 'elapsed': 0.0, 'exit_code': EC_BLOCKED,
+                    'has_warning': False, 'warning_lines': [], 'error_lines': [],
+                    'blocked_reason': reason,
+                })
+                continue
+
             ec, elapsed, output = run_script(
                 script_name, args.bmc_ip, args.user_name, args.password, timeout, log_fh, suite
             )
@@ -730,6 +764,8 @@ def main():
             # 优先读 exit_code 文件（更准确，由脚本内部写入）
             file_ec = read_exit_code(meta_info['LogBasename'])
             final_ec = file_ec if file_ec is not None else ec
+            if final_ec == EC_RECOVERY_FAILED:
+                recovery_failed = True
 
             result = EC_LABELS.get(final_ec, 'ERROR')
 
@@ -782,9 +818,10 @@ def main():
     n_err  = sum(1 for r in records if r['result'] in ('ERROR', 'TIMEOUT'))
     n_wp   = sum(1 for r in records if r['result'] == 'PASS' and r.get('has_warning'))
     n_skip = sum(1 for r in records if r['result'] == 'SKIPPED')
+    n_blocked = sum(1 for r in records if r['result'] == 'BLOCKED')
 
     cprint(f'\n{"="*60}', C_CYAN)
-    cprint(f'  完成！总计={len(records)}  PASS={n_pass}  FAIL={n_fail}  ERROR/TO={n_err}  PASS含WARNING={n_wp}  已跳过={n_skip}', C_BOLD)
+    cprint(f'  完成！总计={len(records)}  PASS={n_pass}  FAIL={n_fail}  ERROR/TO={n_err}  BLOCKED={n_blocked}  PASS含WARNING={n_wp}  已跳过={n_skip}', C_BOLD)
     cprint(f'{"="*60}', C_CYAN)
 
     report_meta = {
@@ -797,6 +834,7 @@ def main():
         'error':       n_err,
         'warn_pass':   n_wp,
         'skipped':     n_skip,
+        'blocked':     n_blocked,
     }
 
     # 写 summary.json
@@ -822,7 +860,7 @@ def main():
     cprint(f'  📝 RunLog   : {log_path}', C_CYAN)
 
     # 整体退出码
-    sys.exit(0 if n_fail == 0 and n_err == 0 else 2)
+    sys.exit(0 if n_fail == 0 and n_err == 0 and n_blocked == 0 else 2)
 
 if __name__ == '__main__':
     try:
