@@ -5,7 +5,8 @@ Date: 2026/04/27
 Update: 2026/07/02 — SDK v1.1.1 日志路径动态发现，消除硬编码 entries_url
 Usage: python3 bmc/managers_004b_operatelog_check.py -i <bmc_ip> -u <username> -p <password>
 Update:
-2026/04/27: 新增，BMC 操作日志服务检查（LogServices/OperateLog）
+2026/04/27: 新增，BMC 操作日志服务检查
+2026/10/29: 按 LogPurposes / 配置 profile 进行语义匹配，不再固定 OperateLog Id
 2026/07/02: 改用 SDK v1.1.1 动态发现的 Log.entries.odata_id，消除硬编码路径
 """
 
@@ -19,17 +20,16 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.resource_semantics import select_log_service
 
 from redfish_sdk import RedfishClient, RedfishException
-
-TARGET_LOG_ID = "OperateLog"
 
 class Managers004bOperateLogCheck(BmcTestBase):
     """BMC 操作日志服务检查
 
     用例编号：Redfish_Managers_004b
     检查项（等价类/边界）：
-    - LogServices 列表中存在 id == "OperateLog" 的服务（边界：不存在为 FAIL）
+    - 按 LogPurposes / LogFacilities / 配置回退标识选择操作日志服务
     - service_enabled == True
     - max_number_of_records > 0（边界：0 为异常）
     - overwrite_policy 非空（等价类：WrapsWhenFull / NeverOverwrites 均合法）
@@ -41,6 +41,10 @@ class Managers004bOperateLogCheck(BmcTestBase):
             case=case,
             config_path=os.path.join(os.getcwd(), "conf/bmc/managers/managers_004b_operatelog_check.json"),
         )
+
+    def _load_extra_config(self, conf_section: dict) -> None:
+        super()._load_extra_config(conf_section)
+        self.LOG_SERVICE_REQUIREMENT = conf_section.get("LogServiceRequirement", {})
 
     def run_test(self):
         test = CommonFunction()
@@ -56,14 +60,29 @@ class Managers004bOperateLogCheck(BmcTestBase):
             )
 
             svcs = self.client.get_manager_log_services()
-            target = next((s for s in svcs if getattr(s, 'id', '') == TARGET_LOG_ID), None)
+            target, match_evidence = select_log_service(
+                svcs, self.LOG_SERVICE_REQUIREMENT
+            )
+            test.add_key_value_to_json(
+                self.result_json_path, "detail.log_service_match",
+                value=match_evidence
+            )
 
             # 存在性检查（边界）
             ok = target is not None
-            checks.append((f"LogService '{TARGET_LOG_ID}' 存在", ok))
+            checks.append(("符合操作日志语义的 LogService 存在", ok))
             if not ok:
-                test.print_log("ERROR", f"未找到 LogService id='{TARGET_LOG_ID}'，已有：{[getattr(s,'id','') for s in svcs]}")
+                test.print_log(
+                    "ERROR",
+                    f"未找到符合配置语义的操作日志服务；匹配证据：{match_evidence}"
+                )
             else:
+                selected = match_evidence["selected"]
+                target_log_id = selected["id"] or selected["entries_uri"].rstrip("/").split("/")[-2]
+                test.print_log(
+                    "INFO",
+                    f"选择 LogService id={target_log_id!r}，依据={selected['matched_by']}"
+                )
                 # service_enabled
                 enabled = getattr(target, 'service_enabled', None)
                 test.print_log("INFO", f"service_enabled: {enabled}")
@@ -92,12 +111,12 @@ class Managers004bOperateLogCheck(BmcTestBase):
                 # v1.1.1: 使用 Log.entries.odata_id 动态发现 Entries URL，不再硬编码路径
                 entries_url = target.entries.odata_id if target.entries else None
                 if not entries_url:
-                    test.print_log("ERROR", f"LogService '{TARGET_LOG_ID}' 无 Entries 链接")
+                    test.print_log("ERROR", f"LogService '{target_log_id}' 无 Entries 链接")
                     checks.append(("Entries 集合可访问", False))
                 else:
                     test.print_log("INFO", f"动态发现 Entries URL: {entries_url}")
                     # Use SDK get_manager_log_entries() to fetch expanded entries
-                    log_entries = self.client.get_manager_log_entries(TARGET_LOG_ID)
+                    log_entries = self.client.get_manager_log_entries(target_log_id)
                     entry_count = len(log_entries)
                     test.print_log("INFO", f"Entries 总数：{entry_count}")
 
