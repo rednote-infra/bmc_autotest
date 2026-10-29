@@ -69,6 +69,8 @@ class Managers004aSelLogCheck(BmcTestBase):
                 username=self.USERNAME,
                 password=self.PASSWORD
             )
+            if not self.prepare_system_client():
+                return
 
             # SEL 定位统一委托公共助手（严格 \bSEL\b 匹配 + EventLog 排除 + LogId 支持），
             # 保留本用例的 OR 判定语义：Managers 侧存在 SEL 才做详细字段校验；

@@ -44,6 +44,11 @@ from typing import Optional
 from func.common_function import CommonFunction
 from func.info_check_function import load_config
 from func.bmc_diag import attach_sdk_logger, diagnose as _diagnose
+from func.system_selection import (
+    SystemSelectionBlocked,
+    bind_system_id,
+    discover_system,
+)
 
 
 class BmcTestBase:
@@ -69,6 +74,8 @@ class BmcTestBase:
         self.CONFIG_PATH = config_path
         self.command_check_result = "PASS"
         self.client      = None
+        self.SYSTEM_ID   = None
+        self._cli_system_id = None
 
         if csv_header is not None:
             self._csv_header = csv_header
@@ -88,10 +95,16 @@ class BmcTestBase:
         parser.add_argument("-i", "--bmc_ip",    type=str, help="BMC IP 地址")
         parser.add_argument("-u", "--user_name", type=str, help="BMC 用户名")
         parser.add_argument("-p", "--password",  type=str, help="BMC 密码")
+        parser.add_argument(
+            "--system-id",
+            type=str,
+            help="ComputerSystem Id or @odata.id (required when the BMC advertises multiple systems)",
+        )
         args, _ = parser.parse_known_args()
         self.BMC_IP   = args.bmc_ip
         self.USERNAME = args.user_name
         self.PASSWORD = args.password
+        self._cli_system_id = (args.system_id or "").strip() or None
 
     # ── 配置文件加载 ─────────────────────────────────────────────────────────
 
@@ -106,8 +119,50 @@ class BmcTestBase:
         if self.BMC_IP   is None: self.BMC_IP   = c.get("BMC_IP")
         if self.USERNAME is None: self.USERNAME = c.get("UserName")
         if self.PASSWORD is None: self.PASSWORD = c.get("PassWord")
+        configured_system_id = (c.get("SystemId") or "").strip() or None
+        self.REQUESTED_SYSTEM_ID = self._cli_system_id or configured_system_id
         self._load_extra_config(c)
         CommonFunction.print_log("DEBUG", "加载配置文件完成")
+
+    def prepare_system_client(self) -> bool:
+        """Discover, validate, and bind this test's ComputerSystem resource.
+
+        Returns ``False`` after recording a BLOCKED result when selection is
+        missing or invalid.  Callers must return from the test immediately in
+        that case so the BMC is not blamed for a configuration problem.
+        """
+        try:
+            selected = discover_system(self.client, self.REQUESTED_SYSTEM_ID)
+            bind_system_id(self.client, selected.system_id)
+        except SystemSelectionBlocked as exc:
+            self._mark_system_selection_blocked(str(exc))
+            return False
+
+        self.SYSTEM_ID = selected.system_id
+        CommonFunction.print_log(
+            "INFO",
+            "Selected ComputerSystem "
+            f"Id={selected.system_id!r}, @odata.id={selected.odata_id or '<not advertised>'}",
+        )
+        return True
+
+    def _mark_system_selection_blocked(self, reason: str) -> None:
+        """Persist a configuration BLOCKED result in the normal result files."""
+        CommonFunction.print_log("WARNING", f"BLOCKED: {reason}")
+        CommonFunction().add_key_value_to_json(
+            self.result_json_path,
+            "detail.cycle",
+            value={"metrics": "ComputerSystem selection", "value": reason},
+        )
+        CommonFunction().add_key_value_to_json(
+            self.result_json_path,
+            "summary",
+            value={"metrics": self.TEST_NUM, "value": "BLOCKED"},
+        )
+        with open(self.result_csv_path, "a", encoding="utf-8") as result_file:
+            result_file.write(f"ComputerSystem selection,BLOCKED: {reason}\n")
+            result_file.write(f"{self.TEST_NUM},BLOCKED\n")
+        self.command_check_result = "BLOCKED"
 
     def _load_extra_config(self, conf_section: dict) -> None:
         """子类重写此方法加载额外配置参数，默认加载公共字段。

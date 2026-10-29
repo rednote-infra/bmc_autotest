@@ -297,6 +297,8 @@ class BootOptionsTest(BmcTestBase):
         test.print_log("INFO", "测试开始")
 
         self._init_client()
+        if not self.prepare_system_client():
+            return
 
         model, context = self._detect_model()
         if model is None:

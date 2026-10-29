@@ -195,6 +195,7 @@ python3 -m bmc.bmc_runner -i <bmc_ip> -u <username> -p <password>
 | `--nostress` | 屏蔽 stress 压测类脚本（压测默认耗时 12h，日常验证建议加此参数） | `--nostress` |
 | `--skip-no-gpu` | 被测机型无 GPU（如通算/存储机型），跳过 GPU 检查用例 | `--skip-no-gpu` |
 | `--skip-no-storage` | 被测机型无存储卡（如通算/GPU 机型），跳过存储检查用例 | `--skip-no-storage` |
+| `--system-id` | 显式选择 BMC 实际广告的 ComputerSystem Id 或 `@odata.id`；BMC 广告多个 Systems 时必填 | `--system-id '<host-system-id>'` |
 
 支持的 suite 分组（见 [`conf/bmc/bmc_runner_suites.json`](conf/bmc/bmc_runner_suites.json)）：
 `chassis` / `systems` / `managers` / `account` / `session` / `update` / `protocol` / `ipmi` / `web` / `event` / `stress`
@@ -213,7 +214,30 @@ python3 -m bmc.bmc_runner -i <bmc_ip> -u <username> -p <password> --suite chassi
 
 # 4. 只调试单个脚本
 python3 -m bmc.bmc_runner -i <bmc_ip> -u <username> -p <password> --only chassis_001_drives_check
+
+# 5. 多 System BMC：显式选择宿主机 ComputerSystem
+python3 -m bmc.bmc_runner -i <bmc_ip> -u <username> -p <password> --suite systems --system-id '<host-system-id>'
 ```
+
+#### 多 ComputerSystem BMC
+
+运行 System 范围的用例前，测试会先读取 `/redfish/v1/Systems`。仅发现一个成员时可自动选择；发现多个成员时不会默认取第一个，而会将用例标记为 `BLOCKED`，并列出可用的 Id 与 `@odata.id`。
+
+可通过两种方式选择目标：
+
+```bash
+# 本次 runner 执行统一选择宿主机
+python3 -m bmc.bmc_runner -i <bmc_ip> -u <username> -p <password> \
+  --suite systems --system-id '<host-system-id>'
+
+# 单条用例选择加速器 System
+python3 -m bmc.systems.systems_006_gpu_check -i <bmc_ip> -u <username> -p <password> \
+  --system-id '<accelerator-system-id>'
+```
+
+尖括号中的名称仅为占位符，不能原样使用。请从 `BLOCKED` 日志的 `Available:` 列表中复制 BMC 实际广告的 Id。
+
+也可在某条用例对应的 `conf/bmc/**/<用例>.json` 配置段中加入 `"SystemId": "<host-system-id>"`。命令行 `--system-id` 优先于 JSON。宿主机、加速器和基板由不同 ComputerSystem 表示时，应分别运行对应测试并传入各自实际 Id：处理器/内存/BIOS 使用宿主机 Id，GPU 使用加速器 Id，FRU 使用基板 Id。每次结果和日志都会记录实际选中的资源。
 
 #### 输出产物
 

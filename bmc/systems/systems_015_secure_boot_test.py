@@ -84,6 +84,8 @@ class SecureBootTest(BmcTestBase):
 
         try:
             self.client = RedfishClient(self.BMC_IP, self.USERNAME, self.PASSWORD)
+            if not self.prepare_system_client():
+                return
 
             # ── 1. 查询 SecureBoot 资源 ─────────────────────────────────────
             test.print_log("INFO", "Step 1：查询 SecureBoot 资源")
