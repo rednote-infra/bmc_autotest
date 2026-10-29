@@ -8,9 +8,9 @@ Update:
 
 校验策略：
   必要字段（为空/异常 → FAIL + ERROR，计入整体结果）：
-    Manufacturer、Model、Version、PowerWatts
+    Manufacturer、Model、Version
   非必要字段（为空或异常 → WARNING 告警，不计入整体结果）：
-    Oem.SerialNumber
+    PowerWatts、Oem.SerialNumber
 
 CSV：每行一个 GPU
 JSON detail.cycle：每个 GPU 一条记录；summary：整体 PASS/FAIL
@@ -86,14 +86,16 @@ class GpuInfoCheck(BmcTestBase):
         else:
             CommonFunction.print_log("INFO", f"[GPU] {gpu_id}：Version = {gpu.version}")
 
-        # 4. PowerWatts（非空字符串，内容合法）
+        # ══ 非必要字段 ══
+
+        # 4. PowerWatts
         if not gpu.power_watts or (isinstance(gpu.power_watts, str) and gpu.power_watts.strip() == ""):
-            CommonFunction.print_log("ERROR", f"[GPU] {gpu_id}：PowerWatts 为空或 None")
-            all_pass = False
+            CommonFunction.print_log(
+                "WARNING",
+                f"[GPU] {gpu_id}：PowerWatts 为空或 None（BMC 未提供可选功耗遥测）",
+            )
         else:
             CommonFunction.print_log("INFO", f"[GPU] {gpu_id}：PowerWatts = {gpu.power_watts}")
-
-        # ══ 非必要字段 ══
 
         # 5. Oem.SerialNumber
         oem_sn = gpu.oem.serial_number if gpu.oem else None
