@@ -58,6 +58,8 @@ class BiosInfoCheck(BmcTestBase):
                 username=self.USERNAME,
                 password=self.PASSWORD
             )
+            if not self.prepare_system_client():
+                return
 
             # ── 1. BiosVersion（从 Systems/1 顶层获取）────────────────────
             # 说明：BiosVersion 是 ComputerSystem 规范字段，挂载在 /Systems/1 顶层；

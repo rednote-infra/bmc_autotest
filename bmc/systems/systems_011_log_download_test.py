@@ -45,6 +45,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.system_selection import discover_system
 from func.info_check_function import load_config
 
 from redfish_sdk import RedfishClient, RedfishException
@@ -98,7 +99,8 @@ class LogDownloadTest(BmcTestBase):
         """连接 BMC，通过 get_manufacturer() 获取厂商名"""
         try:
             tmp_client = RedfishClient(bmc_ip, username, password)
-            manufacturer = tmp_client.get_manufacturer().strip()
+            selected = discover_system(tmp_client, self.REQUESTED_SYSTEM_ID)
+            manufacturer = tmp_client.get_manufacturer(system_id=selected.system_id).strip()
             CommonFunction.print_log("DEBUG", f"BMC {bmc_ip} Manufacturer：{manufacturer}")
             return manufacturer
         except Exception as e:
@@ -143,6 +145,8 @@ class LogDownloadTest(BmcTestBase):
             "定制接口兜底（2xx=PASS+WARNING，均失败=FAIL）。")
 
         self._init_client()
+        if not self.prepare_system_client():
+            return
 
         # ── Step 1：标准接口（SDK 1.3.0 类型化接口）─────────────────────────
         # 修复说明（issue/9，思路源自上游 PR #10 / commit 84f4b2e）：

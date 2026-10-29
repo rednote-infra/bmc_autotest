@@ -329,6 +329,8 @@ class Managers026DefaultConfigCheck(BmcTestBase):
             self.client = RedfishClient(
                 host=self.BMC_IP, username=self.USERNAME, password=self.PASSWORD
             )
+            if not self.prepare_system_client():
+                return
 
             test.print_log("INFO", "─" * 50)
             test.print_log("INFO", "检查项 1：Sharelink（NCSI）关闭")

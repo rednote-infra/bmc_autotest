@@ -68,6 +68,8 @@ class MemoryMetricsTest(BmcTestBase):
 
         try:
             self.client = RedfishClient(self.BMC_IP, self.USERNAME, self.PASSWORD)
+            if not self.prepare_system_client():
+                return
 
             # ── 1. MemoryDomains 枚举（可选组件）────────────────────────────
             test.print_log("INFO", "Step 1：枚举 MemoryDomains")
