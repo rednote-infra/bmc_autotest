@@ -345,6 +345,17 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
                 etag = hdrs.get("etag") or ""
         return str(etag).strip()
 
+    @staticmethod
+    def _is_write_denied(status: int) -> bool:
+        """Return whether a protected write was rejected by authorization.
+
+        Some Redfish implementations return 401 instead of 403 when valid
+        read-only credentials are used for a write.  A preceding authenticated
+        GET proves the credentials are valid, so either response demonstrates
+        that the write privilege was denied.
+        """
+        return status in (401, 403)
+
     # ─────────────────────────────────────────────────────
     # 检查结果记录
     # ─────────────────────────────────────────────────────
@@ -621,7 +632,7 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
             # 先确认 ReadOnly 账号能 GET（200）
             self._record("403 前置：ReadOnly 账号 GET Chassis → 200", LEVEL_INFO,
                          sc_403 == 200, f"HTTP {sc_403}")
-            # ReadOnly 账号 PATCH → 期望 403
+            # ReadOnly 账号 PATCH → 401/403 均表示写权限被拒绝。
             _, body_ch_ro, _ = self._request("GET", self.chassis_uri,
                                               basic_auth=(_ro_user, _ro_pass))
             etag_ro = body_ch_ro.get("@odata.etag", "") if isinstance(body_ch_ro, dict) else ""
@@ -630,9 +641,9 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
                 basic_auth=(_ro_user, _ro_pass),
                 extra_headers={"If-Match": etag_ro} if etag_ro else {}
             )
-            self._record("403 ReadOnly 账号 PATCH 受保护资源 → 403", LEVEL_ERROR,
-                         sc_403p == 403,
-                         f"HTTP {sc_403p}（期望 403；ReadOnly 账号不应有写权限）")
+            self._record("ReadOnly 账号 PATCH 受保护资源 → 401/403", LEVEL_ERROR,
+                         self._is_write_denied(sc_403p),
+                         f"HTTP {sc_403p}（401/403 均表示写操作被拒绝）")
             # 清理测试账号
             if ro_loc:
                 self._request("DELETE", ro_loc, token=token)

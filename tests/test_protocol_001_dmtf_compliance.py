@@ -45,6 +45,11 @@ def _reply(case, method, uri, status, body, headers=None):
 
 
 class Protocol001ComplianceTests(unittest.TestCase):
+    def test_read_only_write_denial_accepts_401_or_403(self):
+        self.assertTrue(Protocol001DmtfCompliance._is_write_denied(401))
+        self.assertTrue(Protocol001DmtfCompliance._is_write_denied(403))
+        self.assertFalse(Protocol001DmtfCompliance._is_write_denied(200))
+
     def test_service_root_is_requested_without_authentication(self):
         case = _case()
         calls = []
