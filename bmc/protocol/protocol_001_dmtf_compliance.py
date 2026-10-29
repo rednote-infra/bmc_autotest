@@ -41,11 +41,14 @@ import sys
 import ssl
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.bmc_event_test_base import BmcEventTestBase
+from func.redfish_event_compat import resolve_test_message
+from redfish_sdk import RedfishClient
 
 # ─────────────────────────────────────────────────────────
 # 常量
@@ -222,6 +225,45 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
                 return e.code, raw.decode(errors="ignore"), hdrs
         except Exception as ex:
             return -1, str(ex), {}
+
+    def _build_submit_test_event_body(self, ev_body, token):
+        """按 ActionInfo 和设备 Registry 构造合法请求，兼容旧式 EventType。"""
+        action = next((value for key, value in ev_body.get("Actions", {}).items()
+                       if "SubmitTestEvent" in key and isinstance(value, dict)), {})
+        parameters = {}
+        info_uri = action.get("@Redfish.ActionInfo")
+        if info_uri:
+            sc, info, _ = self._request("GET", info_uri, token=token)
+            if sc != 200 or not isinstance(info, dict):
+                raise ValueError(f"读取 SubmitTestEvent ActionInfo 失败：HTTP {sc}")
+            parameters = {p["Name"]: p for p in info.get("Parameters", [])
+                          if isinstance(p, dict) and p.get("Name")}
+
+        required = {name for name, p in parameters.items() if p.get("Required")}
+        unsupported = required - {"MessageId", "MessageArgs", "EventType"}
+        if unsupported:
+            raise ValueError(f"无法自动构造必填参数：{sorted(unsupported)}")
+
+        body = {}
+        if "MessageId" in parameters:
+            client = RedfishClient(self.BMC_IP, self.USERNAME, self.PASSWORD,
+                                   read_timeout=self.timeout)
+            try:
+                message_id, message_args = resolve_test_message(client)
+            finally:
+                client.close()
+            body["MessageId"] = message_id
+            if "MessageArgs" in parameters and (message_args or "MessageArgs" in required):
+                body["MessageArgs"] = message_args
+
+        if not body or "EventType" in required:
+            allowable = (parameters.get("EventType", {}).get("AllowableValues")
+                         or action.get("EventType@Redfish.AllowableValues"))
+            if "EventType" not in parameters and not allowable:
+                raise ValueError("设备未声明可用的 MessageId 或 EventType 参数")
+            body["EventType"] = ("StatusChange" if not allowable or "StatusChange" in allowable
+                                 else allowable[0])
+        return body
 
     # ─────────────────────────────────────────────────────
     # ETag 辅助：同时从响应体和响应头取 ETag
@@ -711,7 +753,7 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         ┌───────────────────────────────────┬──────────────────────────────────────────────────────────┐
         │ 场景                              │ 规范要求                                                  │
         ├───────────────────────────────────┼──────────────────────────────────────────────────────────┤
-        │ 7-1 POST Actions（无响应结构）    │ 204 → None；200 → error response                          │
+        │ 7-1 POST Actions                 │ 204 → None；200 → error response；202 → TaskMonitor       │
         │ 7-2 POST Actions（有响应结构）    │ 200 → action response 含 @odata 相关字段                  │
         │ 7-3 POST Actions 400/500          │ → 必须返回 error response                                 │
         │ 7-4 POST 创建资源（无响应结构）   │ 201 → error response（Location header 必须）              │
@@ -737,10 +779,8 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
             )
 
         # ── 探测 EventService.SubmitTestEvent ──
-        # 这是测试 POST Action 响应规范的最佳选择：
-        #   合法参数（EventType=StatusChange）→ 204 + 空体（7-1）
-        #   非法参数（InvalidParam）         → 400 + error response（7-3）
-        #   无副作用，不影响服务器业务
+        # 根据 ActionInfo/Registry 构造合法请求；异步请求可返回 202。
+        # 本项检查 HTTP 响应，不验证测试事件是否最终送达订阅端。
         _, ev_body, _ = self._request("GET", self.event_svc_uri, token=token)
         submit_test_uri = None
         if isinstance(ev_body, dict):
@@ -763,11 +803,18 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self.log.info("  --- 7-1/7-2/7-3 POST Actions（EventService.SubmitTestEvent）---")
 
         if submit_test_uri:
-            # 7-1：合法参数 → 期望 204 + 空体（无响应结构场景）
-            submit_ok_body = {"EventType": "StatusChange"}
-            sc_71, body_71, _ = self._request(
-                "POST", submit_test_uri, body=submit_ok_body, token=token
-            )
+            # 7-1：按设备声明提交合法参数，兼容同步与异步响应。
+            sc_71, body_71, hdrs_71 = None, None, {}
+            try:
+                submit_ok_body = self._build_submit_test_event_body(ev_body, token)
+            except Exception as exc:
+                self._record("7-1 POST Action(SubmitTestEvent) 合法参数发现",
+                             LEVEL_ERROR, False, str(exc))
+            else:
+                self.log.info(f"  SubmitTestEvent 正向请求参数：{submit_ok_body}")
+                sc_71, body_71, hdrs_71 = self._request(
+                    "POST", submit_test_uri, body=submit_ok_body, token=token
+                )
             if sc_71 == 204:
                 ok_none = body_71 in ("", None) or body_71 == b""
                 self._record("7-1 POST Action(SubmitTestEvent) 204 响应体为空（None）",
@@ -785,9 +832,32 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
                     self._record("7-1 POST Action(SubmitTestEvent) 200 返回 error response 结构",
                                  LEVEL_ERROR, _is_error_response(body_71),
                                  f"body keys={list(body_71.keys()) if isinstance(body_71,dict) else body_71!r}")
-            else:
-                self._record("7-1 POST Action(SubmitTestEvent) → 204 或 200", LEVEL_ERROR,
-                             False, f"实际 HTTP {sc_71}（期望 204 或 200）")
+            elif sc_71 == 202:
+                location = hdrs_71.get("location", "")
+                try:
+                    parsed = urllib.parse.urlsplit(location)
+                    location_ok = bool(location) and (
+                        (location.startswith("/") and not parsed.netloc)
+                        or (parsed.scheme in ("http", "https") and bool(parsed.netloc))
+                    )
+                except ValueError:
+                    location_ok = False
+                # Task 消息体是可选的；存在时应提供 Task 类型及任务链接。
+                task_ok = body_71 in ("", None, b"")
+                if isinstance(body_71, dict):
+                    task_type = body_71.get("@odata.type", "")
+                    task_ok = ("error" not in body_71 and isinstance(task_type, str)
+                               and task_type.startswith("#Task.") and task_type.endswith(".Task")
+                               and any(isinstance(body_71.get(key), str) and body_71[key]
+                                       for key in ("@odata.id", "TaskMonitor")))
+                self._record("7-1 POST Action(SubmitTestEvent) 202 异步受理响应",
+                             LEVEL_ERROR, location_ok and task_ok,
+                             f"HTTP 202, Location={location!r}, "
+                             f"Location有效={location_ok}, Task响应有效={task_ok}；"
+                             "仅检查异步受理响应，未验证事件送达")
+            elif sc_71 is not None:
+                self._record("7-1 POST Action(SubmitTestEvent) → 200/202/204", LEVEL_ERROR,
+                             False, f"实际 HTTP {sc_71}（期望 200/202/204）")
 
             # 7-2：若 7-1 已返回 204，则 7-2 需要另一个 Action 来验证"有响应结构"场景
             #      被测 BMC 暂无返回 200+action response 的 Action，记录为 INFO（非必须）
