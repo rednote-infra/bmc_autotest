@@ -5,14 +5,13 @@ Date: 2026/04/22
 Usage: python3 bmc/chassis_007b_nvme_led_negative.py -i <bmc_ip> -u <username> -p <password>
 Update:
 2026/04/22: 新增
-2026/06/23: 读取 Protocol/MediaType 改用 v1.1.0 get_drives() 模型字段；
-            反向写入仍用 client.patch() 直达 BMC（绕过 SDK 本地校验，确保真正测到 BMC 服务端拒绝能力）
+2026/10/29: 支持 LocationIndicatorActive，并兼容旧版 IndicatorLED
 
-数据来源：get_drives() → List[Drive]（含 protocol/media_type/indicator_led，v1.1.0 新增字段）
-          PATCH <drive.odata_id> {"IndicatorLED": "<invalid_value>"}（反向：必须直达 BMC）
+数据来源：get_drives() → List[Drive]
+          PATCH Drive 声明的定位灯属性（反向：必须直达 BMC）
 
 校验策略（反向测试）：
-  取第一块支持 IndicatorLED 的 Drive，发送各类非法值，
+  取第一块支持 LocationIndicatorActive 或 IndicatorLED 的 Drive，发送各类非法值，
   验证 BMC 全部返回 4xx 拒绝请求。
 
   非法场景：
@@ -39,20 +38,34 @@ from func.bmc_test_base import BmcTestBase
 
 from redfish_sdk import RedfishClient, RedfishException  # noqa: F401
 
+MODERN_INDICATOR = "LocationIndicatorActive"
+LEGACY_INDICATOR = "IndicatorLED"
+
 NEGATIVE_CASES = [
-    ("invalid_string",  {"IndicatorLED": "InvalidValue"},  "完全无效字符串"),
-    ("wrong_case_lit",  {"IndicatorLED": "lit"},           "合法值小写（lit 而非 Lit）"),
-    ("wrong_case_off",  {"IndicatorLED": "off"},           "合法值小写（off 而非 Off）"),
-    ("empty_string",    {"IndicatorLED": ""},              "空字符串"),
-    ("numeric_type",    {"IndicatorLED": 1},               "数字类型（应为字符串）"),
-    ("null_value",      {"IndicatorLED": None},            "null 值"),
+    ("invalid_string", "InvalidValue", "完全无效字符串"),
+    ("wrong_case_lit", "lit", "合法值小写"),
+    ("wrong_case_off", "off", "合法值小写"),
+    ("empty_string", "", "空字符串"),
+    ("numeric_type", 1, "错误的数字类型"),
+    ("null_value", None, "null 值"),
 ]
+
+
+def advertised_indicator_property(drive):
+    """Return the preferred indicator property advertised by a Drive."""
+    fields = getattr(drive, "model_fields_set", set())
+    if "location_indicator_active" in fields:
+        return MODERN_INDICATOR
+    if "indicator_led" in fields:
+        return LEGACY_INDICATOR
+    return None
+
 
 class ChassisNVMELEDNegativeCheck(BmcTestBase):
     """Chassis NVMe 指示灯操作测试（反向）
 
     用例编号：Redfish_Chassis_007b
-    检查项：对第一块支持 IndicatorLED 的 Drive 发送非法值，验证 BMC 全部返回非 2xx
+    检查项：对第一块支持定位灯的 Drive 发送非法值，验证 BMC 全部返回非 2xx
     """
 
     def __init__(self, case: str):
@@ -73,15 +86,15 @@ class ChassisNVMELEDNegativeCheck(BmcTestBase):
 
     def _find_target_drive(self):
         """
-        返回第一块 NVMe SSD 且支持 IndicatorLED 的 Drive 的 (odata_id, name)。
+        返回第一块支持定位灯的 NVMe SSD Drive 的 (odata_id, name, property)。
         非 NVMe SSD 盘不在本用例范围，跳过。
-        找不到返回 (None, None)。
+        找不到返回 (None, None, None)。
         """
         try:
             drives = self.client.get_drives()
         except RedfishException as e:
             CommonFunction.print_log("ERROR", f"获取 Drive 列表失败（Redfish 接口异常）：{str(e)}")
-            return None, None
+            return None, None, None
         except ValidationError as e:
             # BMC 端 Bug：返回数据不符合 Redfish 规范（如 Id 为整数而非字符串），
             # SDK Pydantic 模型校验失败，无法解析响应，如实记录 FAIL。
@@ -89,18 +102,19 @@ class ChassisNVMELEDNegativeCheck(BmcTestBase):
                 "ERROR",
                 f"获取 Drive 列表失败（BMC 返回数据不符合 Redfish 规范，SDK 解析错误）：{str(e)}"
             )
-            return None, None
+            return None, None, None
         except Exception as e:
             CommonFunction.print_log(
                 "ERROR",
                 f"获取 Drive 列表时发生未预期异常：{type(e).__name__}: {str(e)}"
             )
-            return None, None
+            return None, None, None
 
         if not drives:
             CommonFunction.print_log("ERROR", "未找到任何 Drive")
-            return None, None
+            return None, None, None
 
+        nvme_names = []
         for drive in drives:
             drive_odata_id = drive.odata_id
             drive_name = drive.name or drive_odata_id or "unknown"
@@ -116,21 +130,28 @@ class ChassisNVMELEDNegativeCheck(BmcTestBase):
                 )
                 continue
 
-            if drive.indicator_led is None:
+            nvme_names.append(drive_name)
+            indicator_property = advertised_indicator_property(drive)
+            if indicator_property is None:
                 CommonFunction.print_log(
                     "ERROR",
-                    f"[{drive_name}] NVMe SSD 缺少 IndicatorLED 字段，功能缺陷，返回 FAIL"
+                    f"[{drive_name}] BMC capability failure: Drive advertises neither "
+                    "LocationIndicatorActive nor IndicatorLED",
                 )
-                return "MISSING", drive_name
+                continue
 
             CommonFunction.print_log(
                 "INFO",
-                f"选用 Drive：{drive_name}（Protocol={protocol} MediaType={media_type}，{drive_odata_id}）"
+                f"选用 Drive：{drive_name}（Protocol={protocol} MediaType={media_type}，"
+                f"IndicatorProperty={indicator_property}，{drive_odata_id}）"
             )
-            return drive_odata_id, drive_name
+            return drive_odata_id, drive_name, indicator_property
+
+        if nvme_names:
+            return "UNSUPPORTED", ", ".join(nvme_names), None
 
         CommonFunction.print_log("ERROR", "未找到任何 NVMe SSD Drive")
-        return None, None
+        return None, None, None
 
     # ── 单条反向用例执行 ───────────────────────────────────────────────────
 
@@ -145,7 +166,7 @@ class ChassisNVMELEDNegativeCheck(BmcTestBase):
         }
 
         # 注意：反向测试必须验证 BMC 服务端对非法值的拒绝能力，因此刻意使用
-        # client.patch() 将原始非法 body 直达 BMC；不可改用 set_drive_indicator_led()，
+        # client.patch() 将原始非法 body 直达 BMC；不可改用类型化定位灯 helper，
         # 否则非法值会被 SDK 本地校验拦截（抛 RedfishValidationError），根本到不了 BMC，
         # 造成假 PASS、掩盖 BMC 缺陷。
         CommonFunction.print_log("INFO", f"[{name}] 发送非法 PATCH 到 {drive_name}：{desc}，body={body}")
@@ -168,15 +189,26 @@ class ChassisNVMELEDNegativeCheck(BmcTestBase):
         result_list = []
         overall = "PASS"
 
-        drive_odata_id, drive_name = self._find_target_drive()
+        drive_odata_id, drive_name, indicator_property = self._find_target_drive()
         if drive_odata_id is None:
             CommonFunction.print_log("ERROR", "未找到任何 NVMe SSD Drive，测试无效")
             return "FAIL", []
-        if drive_odata_id == "MISSING":
-            CommonFunction.print_log("ERROR", f"[{drive_name}] NVMe SSD 缺少 IndicatorLED 字段，功能缺陷")
-            return "FAIL", [{"metrics": drive_name, "value": "FAIL", "description": "NVMe SSD 缺少 IndicatorLED 字段"}]
+        if drive_odata_id == "UNSUPPORTED":
+            description = (
+                "BMC capability failure: NVMe Drive resources advertise neither "
+                "LocationIndicatorActive nor IndicatorLED"
+            )
+            CommonFunction.print_log("ERROR", f"[{drive_name}] {description}")
+            return "FAIL", [{
+                "name": "bmc_indicator_capability",
+                "description": description,
+                "body": "not sent",
+                "rejected": False,
+                "result": "FAIL",
+            }]
 
-        for name, body, desc in NEGATIVE_CASES:
+        for name, value, desc in NEGATIVE_CASES:
+            body = {indicator_property: value}
             step = self._run_negative_case(drive_odata_id, drive_name, name, body, desc)
             result_list.append(step)
             if step["result"] == "FAIL":
@@ -184,10 +216,21 @@ class ChassisNVMELEDNegativeCheck(BmcTestBase):
 
         # 确保测试结束后指示灯为 Off（合法值，用 v1.1.0 类型化写接口）
         try:
-            self.client.set_drive_indicator_led(drive_odata_id, "Off")
-            CommonFunction.print_log("INFO", "测试结束，已将 IndicatorLED 重置为 Off")
+            if indicator_property == MODERN_INDICATOR:
+                self.client.set_drive_location_indicator(drive_odata_id, False)
+                reset_value = False
+            else:
+                self.client.set_drive_indicator_led(drive_odata_id, "Off")
+                reset_value = "Off"
+            CommonFunction.print_log(
+                "INFO",
+                f"测试结束，已将 {indicator_property} 重置为 {reset_value}",
+            )
         except RedfishException as e:
-            CommonFunction.print_log("WARNING", f"重置 IndicatorLED 失败：{str(e)}")
+            CommonFunction.print_log(
+                "WARNING",
+                f"重置 {indicator_property} 失败：{str(e)}",
+            )
 
         return overall, result_list
 
