@@ -1,8 +1,10 @@
 import unittest
+from types import SimpleNamespace
 
 from func.bmc_reset_state import (
     ProbeResult,
     ResetRecoveryStateMachine,
+    probe_redfish_service_root,
 )
 
 
@@ -32,6 +34,30 @@ class SequenceProbe:
 
 
 class ResetRecoveryStateMachineTests(unittest.TestCase):
+    def test_redfish_probe_uses_service_root_on_multi_system_bmc(self):
+        class MultiSystemClient:
+            def __init__(self, **_kwargs):
+                self.closed = False
+
+            def root(self):
+                return SimpleNamespace(redfish_version="1.15.1")
+
+            def get_manufacturer(self):
+                raise AssertionError("system selection must not be required")
+
+            def close(self):
+                self.closed = True
+
+        result = probe_redfish_service_root(
+            MultiSystemClient,
+            "192.0.2.1",
+            "admin",
+            "password",
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual("ServiceRoot RedfishVersion=1.15.1", result.detail)
+
     def machine(self, clock):
         return ResetRecoveryStateMachine(
             monotonic=clock.monotonic,

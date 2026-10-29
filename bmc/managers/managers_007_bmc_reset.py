@@ -23,7 +23,11 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction, ipmitool_bin, ping_once
 from func.bmc_test_base import BmcTestBase
-from func.bmc_reset_state import ProbeResult, ResetRecoveryStateMachine
+from func.bmc_reset_state import (
+    ProbeResult,
+    ResetRecoveryStateMachine,
+    probe_redfish_service_root,
+)
 
 from redfish_sdk import RedfishClient, RedfishException
 
@@ -51,23 +55,12 @@ class Managers007BmcReset(BmcTestBase):
         )
 
     def _probe_redfish(self) -> ProbeResult:
-        client = None
-        try:
-            client = RedfishClient(
-                host=self.BMC_IP,
-                username=self.USERNAME,
-                password=self.PASSWORD,
-            )
-            manufacturer = client.get_manufacturer()
-            return ProbeResult(True, f"Manufacturer={manufacturer}")
-        except Exception as exc:
-            return ProbeResult(False, f"{type(exc).__name__}: {str(exc)[:160]}")
-        finally:
-            if client:
-                try:
-                    client.close()
-                except Exception:
-                    pass
+        return probe_redfish_service_root(
+            RedfishClient,
+            self.BMC_IP,
+            self.USERNAME,
+            self.PASSWORD,
+        )
 
     def _probe_ping(self) -> ProbeResult:
         if ping_once(self.BMC_IP, timeout_sec=2):

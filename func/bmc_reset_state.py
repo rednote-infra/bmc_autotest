@@ -14,6 +14,27 @@ class ProbeResult:
     detail: str
 
 
+def probe_redfish_service_root(client_factory, host, username, password) -> ProbeResult:
+    """Probe Redfish without selecting a System, Chassis, or Manager member."""
+    client = None
+    try:
+        client = client_factory(host=host, username=username, password=password)
+        root = client.root()
+        if isinstance(root, dict):
+            version = root.get("RedfishVersion")
+        else:
+            version = getattr(root, "redfish_version", None)
+        return ProbeResult(True, f"ServiceRoot RedfishVersion={version or 'unknown'}")
+    except Exception as exc:
+        return ProbeResult(False, f"{type(exc).__name__}: {str(exc)[:160]}")
+    finally:
+        if client:
+            try:
+                client.close()
+            except Exception:
+                pass
+
+
 @dataclass
 class ResetRecoveryResult:
     """Recorded outcome of every reset/recovery phase."""
