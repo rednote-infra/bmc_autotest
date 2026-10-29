@@ -147,11 +147,12 @@ class BmcEventTestBase:
 
         Parameters
         ----------
-        final    : "PASS" 或 "FAIL"
+        final    : "PASS"、"FAIL" 或 "BLOCKED"
         findings : list[dict]，每项含 "item"/"result"/"detail"
         """
         fails  = [f for f in findings if f["result"] == "FAIL"]
         passes = [f for f in findings if f["result"] == "PASS"]
+        blocked = [f for f in findings if f["result"] == "BLOCKED"]
         result = {
             "detail":  {
                 "findings": findings,
@@ -159,6 +160,7 @@ class BmcEventTestBase:
                     "total": len(findings),
                     "pass":  len(passes),
                     "fail":  len(fails),
+                    "blocked": len(blocked),
                 },
             },
             "summary": {"metrics": self.TEST_NAME, "value": final},

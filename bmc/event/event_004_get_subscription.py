@@ -38,6 +38,7 @@ import uuid
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.bmc_event_test_base import BmcEventTestBase
+from func.bmc_prerequisite import PrerequisiteFailure, blocked_findings
 from func.redfish_event_compat import modern_event_destination, subscription_event_types
 
 from redfish_sdk import RedfishClient, RedfishException
@@ -91,9 +92,17 @@ class Event004GetSubscription(BmcEventTestBase):
         findings = []
         temporary_context = None
         collection_uri = None
+        sub_id = None
         try:
             # 先获取订阅列表，取第一个订阅的 ID
-            subs = self.client.get_subscriptions()
+            try:
+                subs = self.client.get_subscriptions()
+            except Exception as exc:
+                raise PrerequisiteFailure(
+                    "Event subscription discovery",
+                    f"Unable to list subscriptions: {type(exc).__name__}: {exc}",
+                    ("Select subscription", "Query subscription", "Validate fields"),
+                ) from exc
             findings.append({"item": "SDK get_subscriptions() 正常返回",
                              "result": "PASS",
                              "detail": f"共 {len(subs)} 条 Subscription 对象"})
@@ -102,12 +111,20 @@ class Event004GetSubscription(BmcEventTestBase):
             if not subs:
                 # 自动补齐查询用例的前置条件：创建临时订阅（唯一 Context 标记归属）
                 service = self.client.get_event_service()
-                collection_uri = service.subscriptions.odata_id.rstrip("/")
+                subscriptions = getattr(service, "subscriptions", None)
+                advertised_uri = getattr(subscriptions, "odata_id", None)
+                if not isinstance(advertised_uri, str) or not advertised_uri.strip():
+                    raise PrerequisiteFailure(
+                        "Event subscription discovery",
+                        "EventService does not advertise a Subscriptions URI",
+                        ("Create temporary subscription", "Query subscription", "Validate fields"),
+                    )
+                collection_uri = advertised_uri.rstrip("/")
                 temporary_context = f"{self.test_sub_context}_{uuid.uuid4().hex}"
                 created = self.client.subscribe(
                     self.test_sub_dest, subscription_event_types(self.client), temporary_context
                 )
-                sub_id = created.odata_id
+                sub_id = getattr(created, "odata_id", None)
                 if not sub_id or not sub_id.startswith(collection_uri + "/"):
                     matches = self._temporary_subscription_uris(collection_uri, temporary_context)
                     if len(matches) != 1:
@@ -119,7 +136,15 @@ class Event004GetSubscription(BmcEventTestBase):
             else:
                 # 已有订阅时保持原来的只读查询流程
                 first_sub = subs[0]
-                sub_id = first_sub.id if first_sub.id else first_sub.odata_id
+                first_id = getattr(first_sub, "id", None)
+                first_uri = getattr(first_sub, "odata_id", None)
+                sub_id = first_id or first_uri
+                if not sub_id:
+                    raise PrerequisiteFailure(
+                        "Event subscription discovery",
+                        "Selected subscription has neither Id nor @odata.id",
+                        ("Query subscription", "Validate fields"),
+                    )
             self.log.info(f"  使用订阅 ID：{sub_id!r}")
 
             sub = self.client.get_subscription(sub_id)
@@ -155,6 +180,11 @@ class Event004GetSubscription(BmcEventTestBase):
                                  "detail": f"EventTypes={et!r}"})
                 self.log.info(f"  {'✅' if ok_et else '❌'} EventTypes={et!r}")
 
+        except PrerequisiteFailure as failure:
+            findings = blocked_findings(failure)
+            self.log.error(
+                f"BLOCKED: {failure.prerequisite}: {failure.reason}"
+            )
         except RedfishException as e:
             findings.append({"item": "GET Subscription", "result": "FAIL",
                              "detail": f"RedfishException: {e}"})
@@ -180,7 +210,8 @@ class Event004GetSubscription(BmcEventTestBase):
             self.client.close()
 
         fails = [f for f in findings if f["result"] == "FAIL"]
-        final = "PASS" if not fails else "FAIL"
+        blocked = [f for f in findings if f["result"] == "BLOCKED"]
+        final = "BLOCKED" if blocked else "PASS" if not fails else "FAIL"
         self.command_check_result = final
         self.log.info(f"最终结果：{final}（{len(findings) - len(fails)}/{len(findings)} PASS）")
         self._write_result(final, findings)
@@ -191,7 +222,11 @@ if __name__ == "__main__":
     try:
         obj = Event004GetSubscription()
         obj.run_test()
-        exit_code = 0 if obj.command_check_result == "PASS" else 2
+        exit_code = {
+            "PASS": 0,
+            "FAIL": 2,
+            "BLOCKED": 4,
+        }.get(obj.command_check_result, 1)
     except KeyboardInterrupt:
         exit_code = 130
     except Exception as e:

@@ -29,6 +29,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.bmc_prerequisite import PrerequisiteFailure, require_object_fields
 
 from redfish_sdk import RedfishClient, RedfishException  # noqa: F401
 
@@ -42,6 +43,13 @@ VALID_HOTSPARE_TYPE    = {"None", "Global", "Chassis", "Dedicated"}
 VALID_STATUS_INDICATOR = {"OK", "Fail", "Rebuild", "PredictiveFailureAnalysis",
                            "Hotspare", "InACriticalArray", "InAFailedArray"}
 
+DRIVE_RESOURCE_FIELDS = (
+    "name", "odata_id", "manufacturer", "model", "revision", "serial_number",
+    "protocol", "capacity_bytes", "capable_speed_gbs", "negotiated_speed_gbs",
+    "status", "media_type", "hotspare_type", "failure_predicted",
+    "predicted_media_life_left_percent", "status_indicator", "location",
+)
+
 class DrivesInfoCheck(BmcTestBase):
     """Chassis Drives 集合资源信息检查
 
@@ -52,6 +60,7 @@ class DrivesInfoCheck(BmcTestBase):
     """
 
     def __init__(self, case: str):
+        self.prerequisite_failure = None
         super().__init__(
             case=case,
             config_path=os.path.join(os.getcwd(), "conf/bmc/chassis/chassis_001_drives_check.json"),
@@ -89,6 +98,12 @@ class DrivesInfoCheck(BmcTestBase):
                  all_pass   — 仅由必要字段决定
                  drive_info — 盘的关键信息，供 CSV / JSON 备份
         """
+        require_object_fields(
+            drive,
+            DRIVE_RESOURCE_FIELDS,
+            "Drive resource discovery",
+            ("Drive field validation", "Drive result serialization"),
+        )
         drive_name = drive.name or drive.odata_id or "unknown"
         all_pass = True
 
@@ -354,7 +369,15 @@ class DrivesInfoCheck(BmcTestBase):
         results = []
         drive_info_list = []
         for drive in drive_list:
-            passed, drive_info = self._check_single_drive(drive)
+            try:
+                passed, drive_info = self._check_single_drive(drive)
+            except PrerequisiteFailure as failure:
+                self.prerequisite_failure = failure
+                CommonFunction.print_log(
+                    "ERROR",
+                    f"BLOCKED: {failure.prerequisite}: {failure.reason}",
+                )
+                return "BLOCKED", []
             results.append(passed)
             drive_info_list.append(drive_info)
 
@@ -381,6 +404,14 @@ class DrivesInfoCheck(BmcTestBase):
 
         drive_check_result, drive_info_list = self.drives_info_check()
         self.command_check_result = drive_check_result
+
+        failure = self.prerequisite_failure
+        if failure:
+            test.add_key_value_to_json(
+                self.result_json_path,
+                "detail.cycle",
+                value={"metrics": "prerequisite_failure", "value": failure.to_dict()},
+            )
 
         # CSV：每行记录一块盘的关键信息
         with open(self.result_csv_path, "a", encoding="utf-8") as f:
@@ -427,6 +458,8 @@ if __name__ == "__main__":
             exit_code = 0
         elif checker.command_check_result == "FAIL":
             exit_code = 2
+        elif checker.command_check_result == "BLOCKED":
+            exit_code = 4
         else:
             exit_code = 1
 

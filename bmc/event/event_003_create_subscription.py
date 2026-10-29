@@ -32,6 +32,11 @@ import traceback
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.bmc_event_test_base import BmcEventTestBase
+from func.bmc_prerequisite import (
+    PrerequisiteFailure,
+    blocked_findings,
+    subscription_member_uris,
+)
 from func.redfish_event_compat import subscription_event_types
 
 from redfish_sdk import RedfishClient, RedfishException
@@ -72,14 +77,32 @@ class Event003CreateSubscription(BmcEventTestBase):
         self.client = RedfishClient(self.BMC_IP, self.USERNAME, self.PASSWORD)
 
         findings = []
+        sub_col_uri = None
         try:
             # 订阅集合 URI（动态发现）
             sub_col_uri = self._get_sub_col_uri()
+            if not isinstance(sub_col_uri, str) or not sub_col_uri.strip():
+                raise PrerequisiteFailure(
+                    "Event subscription discovery",
+                    "EventService does not advertise a Subscriptions URI",
+                    ("Create subscription", "Verify subscription", "Cleanup subscription"),
+                )
 
             # 记录创建前的集合状态（get_raw 兜底，不依赖 SDK pydantic）
-            members_before = self._get_members_raw()
+            try:
+                members_before = self._get_members_raw()
+            except Exception as exc:
+                raise PrerequisiteFailure(
+                    "Event subscription discovery",
+                    f"Unable to read baseline subscriptions: {type(exc).__name__}: {exc}",
+                    ("Create subscription", "Verify subscription", "Cleanup subscription"),
+                ) from exc
             count_before   = len(members_before)
-            before_uris    = {m["@odata.id"] for m in members_before}
+            before_uris = subscription_member_uris(
+                members_before,
+                "Event subscription discovery",
+                ("Create subscription", "Verify subscription", "Cleanup subscription"),
+            )
             self.log.info(f"  创建前订阅数：{count_before}")
 
             # v1.1.1: subscribe() 原生支持 http_headers 参数，无需 BmcHttpClient 降级
@@ -145,8 +168,12 @@ class Event003CreateSubscription(BmcEventTestBase):
             # 若 SDK 未能给 URI，从集合差集获取
             if not new_uri:
                 members_after = self._get_members_raw()
-                new_uris = [m["@odata.id"] for m in members_after
-                            if m["@odata.id"] not in before_uris]
+                after_uris = subscription_member_uris(
+                    members_after,
+                    "Created subscription discovery",
+                    ("Verify subscription", "Cleanup subscription"),
+                )
+                new_uris = list(after_uris - before_uris)
                 if new_uris:
                     new_uri = new_uris[0]
                     self.log.info(f"  从差集获取新建 URI：{new_uri}")
@@ -169,20 +196,28 @@ class Event003CreateSubscription(BmcEventTestBase):
             self.log.info(f"  {'✅' if increased else '❌'} 订阅数：{count_before} -> {count_after}")
 
             # 验证新订阅在集合中可见
-            all_uris = {m["@odata.id"] for m in members_after2}
+            all_uris = subscription_member_uris(
+                members_after2,
+                "Created subscription verification",
+            )
             found    = new_uri in all_uris
             findings.append({"item": "新建订阅可在集合中查询到",
                              "result": "PASS" if found else "FAIL",
                              "detail": f"URI={new_uri!r}"})
             self.log.info(f"  {'✅' if found else '❌'} 新订阅在集合中：{found}")
 
+        except PrerequisiteFailure as failure:
+            findings = blocked_findings(failure)
+            self.log.error(
+                f"BLOCKED: {failure.prerequisite}: {failure.reason}"
+            )
         except Exception as e:
             findings.append({"item": "订阅创建流程", "result": "FAIL",
                              "detail": f"未预期异常：{e}"})
             self.log.error(f"未预期异常：{e}\n{traceback.format_exc()}")
         finally:
             # Cleanup（保护：只删具体订阅 URI，不删集合 URI）
-            if self._created_sub_uri and self._created_sub_uri != sub_col_uri:
+            if self._created_sub_uri and sub_col_uri and self._created_sub_uri != sub_col_uri:
                 try:
                     self.log.info(f"  Cleanup：删除测试订阅 {self._created_sub_uri}")
                     self.client.delete(self._created_sub_uri)
@@ -194,7 +229,8 @@ class Event003CreateSubscription(BmcEventTestBase):
             self.client.close()
 
         fails = [f for f in findings if f["result"] == "FAIL"]
-        final = "PASS" if not fails else "FAIL"
+        blocked = [f for f in findings if f["result"] == "BLOCKED"]
+        final = "BLOCKED" if blocked else "PASS" if not fails else "FAIL"
         self.command_check_result = final
         self.log.info(f"最终结果：{final}（{len(findings) - len(fails)}/{len(findings)} 非FAIL）")
         self._write_result(final, findings)
@@ -205,7 +241,11 @@ if __name__ == "__main__":
     try:
         obj = Event003CreateSubscription()
         obj.run_test()
-        exit_code = 0 if obj.command_check_result == "PASS" else 2
+        exit_code = {
+            "PASS": 0,
+            "FAIL": 2,
+            "BLOCKED": 4,
+        }.get(obj.command_check_result, 1)
     except KeyboardInterrupt:
         exit_code = 130
     except Exception as e:

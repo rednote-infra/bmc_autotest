@@ -33,6 +33,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.bmc_prerequisite import PrerequisiteFailure, require_object_fields
 
 from redfish_sdk import RedfishClient, RedfishException  # noqa: F401
 from redfish_sdk.models.drive import Drive
@@ -43,6 +44,13 @@ VALID_STATUS_INDICATOR = {
     "Hotspare", "InACriticalArray", "InAFailedArray"
 }
 
+DRIVE_RESOURCE_FIELDS = (
+    "id", "manufacturer", "model", "revision", "serial_number",
+    "capacity_bytes", "protocol", "capable_speed_gbs", "negotiated_speed_gbs",
+    "status", "media_type", "hotspare_type", "failure_predicted",
+    "predicted_media_life_left_percent", "status_indicator", "location",
+)
+
 class PhysicalDrivesInfoCheck(BmcTestBase):
     """Systems Storage 物理盘信息检查（SAS 卡管理的 HDD）
 
@@ -51,6 +59,7 @@ class PhysicalDrivesInfoCheck(BmcTestBase):
     """
 
     def __init__(self, case: str):
+        self.prerequisite_failure = None
         super().__init__(
             case=case,
             config_path=os.path.join(os.getcwd(), "conf/bmc/systems/systems_003b_physical_drives_check.json"),
@@ -75,6 +84,12 @@ class PhysicalDrivesInfoCheck(BmcTestBase):
     # ── 单块物理盘校验 ────────────────────────────────────────────────────────
 
     def _check_drive(self, drive: Drive, storage_id: str) -> tuple:
+        require_object_fields(
+            drive,
+            DRIVE_RESOURCE_FIELDS,
+            "Drive resource discovery",
+            ("Drive field validation", "Drive result serialization"),
+        )
         drive_id = drive.id or drive.serial_number or "unknown"
         label = f"{storage_id}/{drive_id}"
         all_pass = True
@@ -273,7 +288,15 @@ class PhysicalDrivesInfoCheck(BmcTestBase):
                     all_results.append(False)
                     continue
 
-                passed, drive_info = self._check_drive(drive, storage_id)
+                try:
+                    passed, drive_info = self._check_drive(drive, storage_id)
+                except PrerequisiteFailure as failure:
+                    self.prerequisite_failure = failure
+                    CommonFunction.print_log(
+                        "ERROR",
+                        f"BLOCKED: {failure.prerequisite}: {failure.reason}",
+                    )
+                    return "BLOCKED", []
                 all_results.append(passed)
                 drive_info_list.append(drive_info)
 
@@ -301,6 +324,14 @@ class PhysicalDrivesInfoCheck(BmcTestBase):
 
         check_result, drive_info_list = self.physical_drives_info_check()
         self.command_check_result = check_result
+
+        failure = self.prerequisite_failure
+        if failure:
+            test.add_key_value_to_json(
+                self.result_json_path,
+                "detail.cycle",
+                value={"metrics": "prerequisite_failure", "value": failure.to_dict()},
+            )
 
         with open(self.result_csv_path, "a", encoding="utf-8") as f:
             for info in drive_info_list:
@@ -343,6 +374,8 @@ if __name__ == "__main__":
             exit_code = 0
         elif checker.command_check_result == "FAIL":
             exit_code = 2
+        elif checker.command_check_result == "BLOCKED":
+            exit_code = 4
         else:
             exit_code = 1
         start_time = time.time()
