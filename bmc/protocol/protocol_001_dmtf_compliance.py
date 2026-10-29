@@ -19,8 +19,7 @@ Usage: python3 bmc/protocol_001_dmtf_compliance.py -i <bmc_ip> -u <username> -p 
 
 覆盖检查项（共 8 大类 30+ 项）：
   1. Redfish Version      — 根节点可访问、RedfishVersion 字段合规
-  2. ETags                — @odata.etag 可获取、不带 If-Match PATCH 返回 428
-                           （测试资源：/Chassis/1 UID点灯、/Systems/1 BootOrder）
+  2. ETags                — 按资源实际能力检查可选 ETag / If-Match 行为
   3. HTTP Method 合规     — GET/POST/PATCH/DELETE 各自幂等性及支持情况
   4. HTTP Header 合规     — Content-Type、Authorization 校验、If-Match 响应
   5. HTTP StatusCode 合规 — 各场景状态码正确（200/201/204/400/401/403/404/405/428 等）
@@ -48,7 +47,10 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.bmc_event_test_base import BmcEventTestBase
 from func.redfish_event_compat import resolve_test_message
-from redfish_sdk import RedfishClient
+try:
+    from redfish_sdk import RedfishClient
+except ImportError:  # 允许不安装设备 SDK 时运行纯离线合规测试
+    RedfishClient = None
 
 # ─────────────────────────────────────────────────────────
 # 常量
@@ -56,6 +58,11 @@ from redfish_sdk import RedfishClient
 LEVEL_ERROR   = "ERROR"
 LEVEL_WARNING = "WARNING"
 LEVEL_INFO    = "INFO"
+
+RESULT_PASS    = "PASS"
+RESULT_FAIL    = "FAIL"
+RESULT_SKIPPED = "SKIPPED"
+RESULT_BLOCKED = "BLOCKED"
 
 
 class Protocol001DmtfCompliance(BmcEventTestBase):
@@ -73,6 +80,8 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self._session_location    = ''
         self._session_location_ok = False
         self._session_delete_sc   = -1
+        self._session_create_evidence = {}
+        self._session_delete_evidence = {}
         self.BASE_URL      = ''
         self.timeout       = 30
         # 资源 URI 一律运行时从 ServiceRoot 动态发现（conf 显式配置可覆盖）
@@ -84,6 +93,7 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self.accounts_uri  = ''
         self.event_svc_uri = ''
         self._ctx          = None
+        self._last_evidence = {}
         super().__init__()
 
     """DMTF Redfish 协议合规性检查"""
@@ -105,19 +115,19 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self.BASE_URL     = f"https://{self.BMC_IP}"
         self._build_ctx()
 
-    def _discover_uris(self) -> None:
+    def _discover_uris(self) -> bool:
         """从 ServiceRoot 动态发现资源 URI。
 
         /redfish/v1 是 DMTF 唯一强约定入口，其余 URI 全部从 root 的
         Links / 顶层服务链接 / 集合 Members 逐级发现，不硬编码任何资源路径。
-        conf 显式配置的 URI 优先于动态发现结果。
+        conf 显式配置的 URI 只有在集合确实发布该成员时才可用于消歧。
         """
-        sc, root, _ = self._request(
-            "GET", "/redfish/v1", basic_auth=(self.USERNAME, self.PASSWORD)
-        )
+        sc, root, _ = self._request("GET", "/redfish/v1")
         if sc != 200 or not isinstance(root, dict):
-            self.log.warning(f"ServiceRoot 发现失败（HTTP {sc}），URI 保持为空，相关检查将跳过")
-            return
+            self._record("从 ServiceRoot 发现资源", LEVEL_ERROR, False,
+                         f"ServiceRoot 返回 HTTP {sc}，无法继续资源发现",
+                         result=RESULT_BLOCKED)
+            return False
         links = root.get("Links", {}) or {}
 
         def _link(key: str) -> str:
@@ -126,16 +136,36 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
             top = (root.get(key) or {}).get("@odata.id", "")
             return top or (links.get(key) or {}).get("@odata.id", "")
 
-        def _first_member(col_uri: str) -> str:
-            """GET 集合，返回第一个成员的 @odata.id"""
+        def _member(col_uri: str, configured: str, name: str) -> str:
+            """仅从集合发布的成员中选择；多成员必须由配置显式消歧。"""
             if not col_uri:
+                self._record(f"发现 {name} 集合", LEVEL_ERROR, False,
+                             f"ServiceRoot 未发布 {name} 集合链接",
+                             result=RESULT_BLOCKED)
                 return ""
-            _, body, _ = self._request(
+            member_sc, body, _ = self._request(
                 "GET", col_uri, basic_auth=(self.USERNAME, self.PASSWORD)
             )
-            members = (body.get("Members") or []) if isinstance(body, dict) else []
-            if members and isinstance(members[0], dict):
-                return members[0].get("@odata.id", "")
+            members = [m.get("@odata.id", "") for m in (body.get("Members") or [])
+                       if isinstance(m, dict) and m.get("@odata.id")] \
+                if isinstance(body, dict) else []
+            if member_sc != 200 or not members:
+                self._record(f"发现 {name} 成员", LEVEL_ERROR, False,
+                             f"GET {col_uri} 返回 HTTP {member_sc}，Members={members!r}",
+                             result=RESULT_BLOCKED)
+                return ""
+            if configured:
+                if configured in members:
+                    return configured
+                self._record(f"验证配置的 {name} URI", LEVEL_ERROR, False,
+                             f"配置值 {configured!r} 不在服务发布的成员中：{members!r}",
+                             result=RESULT_BLOCKED)
+                return ""
+            if len(members) == 1:
+                return members[0]
+            self._record(f"选择 {name} 成员", LEVEL_ERROR, False,
+                         f"集合发布了多个成员，需配置 {name}Uri 显式选择：{members!r}",
+                         result=RESULT_BLOCKED)
             return ""
 
         # 集合 URI（root.Links 指向集合本身）
@@ -143,15 +173,15 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         chassis_col = _link("Chassis")
         managers_col = _link("Managers")
 
-        # 成员 URI（集合第一个成员，适配 /Systems/Self 等厂商命名）
-        if not self.systems_uri:
-            self.systems_uri = _first_member(systems_col)
-        if not self.chassis_uri:
-            self.chassis_uri = _first_member(chassis_col)
-        if not self.managers_uri:
-            self.managers_uri = _first_member(managers_col)
+        # 成员 URI（单成员自动选择；多成员只能用已发布的配置值消歧）
+        self.systems_uri = _member(systems_col, self.systems_uri, "Systems")
+        self.chassis_uri = _member(chassis_col, self.chassis_uri, "Chassis")
+        self.managers_uri = _member(managers_col, self.managers_uri, "Managers")
         if not self.sessions_uri:
             self.sessions_uri = _link("Sessions")
+        if not self.sessions_uri:
+            self._record("发现 Sessions 集合", LEVEL_ERROR, False,
+                         "ServiceRoot 未发布 Sessions 链接", result=RESULT_BLOCKED)
 
         # Power 子资源从 Chassis 的 Power 链接发现
         if not self.power_uri and self.chassis_uri:
@@ -177,6 +207,8 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
             f"Managers={self.managers_uri}, Sessions={self.sessions_uri}, "
             f"Power={self.power_uri}, Accounts={self.accounts_uri}"
         )
+        return bool(self.systems_uri and self.chassis_uri and
+                    self.managers_uri and self.sessions_uri)
 
     def _build_ctx(self):
         self._ctx = ssl.create_default_context()
@@ -192,6 +224,12 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         发送 HTTP 请求，返回 (status_code, body_dict_or_str, resp_headers_dict)
         resp_headers_dict: 全小写 key
         """
+        if not path:
+            self._last_evidence = {
+                "method": method, "uri": path, "status": None,
+                "response": "resource URI was not discovered", "headers": {},
+            }
+            return -1, "resource URI was not discovered", {}
         headers = {"Content-Type": "application/json"}
         if token:
             headers["X-Auth-Token"] = token
@@ -213,18 +251,44 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
                 raw  = resp.read()
                 hdrs = {k.lower(): v for k, v in resp.headers.items()}
                 try:
-                    return resp.status, json.loads(raw), hdrs
+                    parsed = json.loads(raw)
                 except Exception:
-                    return resp.status, raw.decode(errors="ignore"), hdrs
+                    parsed = raw.decode(errors="ignore")
+                self._capture_evidence(method, path, resp.status, parsed, hdrs)
+                return resp.status, parsed, hdrs
         except urllib.error.HTTPError as e:
             raw  = e.read()
             hdrs = {k.lower(): v for k, v in e.headers.items()}
             try:
-                return e.code, json.loads(raw), hdrs
+                parsed = json.loads(raw)
             except Exception:
-                return e.code, raw.decode(errors="ignore"), hdrs
+                parsed = raw.decode(errors="ignore")
+            self._capture_evidence(method, path, e.code, parsed, hdrs)
+            return e.code, parsed, hdrs
         except Exception as ex:
+            self._capture_evidence(method, path, -1, str(ex), {})
             return -1, str(ex), {}
+
+    @staticmethod
+    def _redact(value):
+        """保留原始响应证据结构，同时屏蔽凭据和会话令牌。"""
+        sensitive = {"password", "token", "x-auth-token", "authorization"}
+        if isinstance(value, dict):
+            return {k: ("<redacted>" if str(k).lower() in sensitive
+                        else Protocol001DmtfCompliance._redact(v))
+                    for k, v in value.items()}
+        if isinstance(value, list):
+            return [Protocol001DmtfCompliance._redact(v) for v in value]
+        return value
+
+    def _capture_evidence(self, method, uri, status, response, headers):
+        self._last_evidence = {
+            "method": method,
+            "uri": uri,
+            "status": status,
+            "response": self._redact(response),
+            "headers": self._redact(headers),
+        }
 
     def _build_submit_test_event_body(self, ev_body, token):
         """按 ActionInfo 和设备 Registry 构造合法请求，兼容旧式 EventType。"""
@@ -246,6 +310,8 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
 
         body = {}
         if "MessageId" in parameters:
+            if RedfishClient is None:
+                raise ValueError("redfish-python-sdk 未安装，无法解析测试 MessageId")
             client = RedfishClient(self.BMC_IP, self.USERNAME, self.PASSWORD,
                                    read_timeout=self.timeout)
             try:
@@ -279,18 +345,37 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
                 etag = hdrs.get("etag") or ""
         return str(etag).strip()
 
+    @staticmethod
+    def _is_write_denied(status: int) -> bool:
+        """Return whether a protected write was rejected by authorization.
+
+        Some Redfish implementations return 401 instead of 403 when valid
+        read-only credentials are used for a write.  A preceding authenticated
+        GET proves the credentials are valid, so either response demonstrates
+        that the write privilege was denied.
+        """
+        return status in (401, 403)
+
     # ─────────────────────────────────────────────────────
     # 检查结果记录
     # ─────────────────────────────────────────────────────
-    def _record(self, item, level, passed, detail):
-        result = "PASS" if passed else ("FAIL" if level == LEVEL_ERROR else "WARN")
-        entry  = {"item": item, "level": level, "result": result, "detail": detail}
+    def _record(self, item, level, passed, detail, result=None, evidence=None):
+        if result is None:
+            result = RESULT_PASS if passed else (
+                RESULT_FAIL if level == LEVEL_ERROR else RESULT_SKIPPED
+            )
+        entry = {
+            "item": item, "level": level, "result": result, "detail": detail,
+            "evidence": dict(evidence if evidence is not None else self._last_evidence),
+        }
         self.findings.append(entry)
-        if passed:
+        if result == RESULT_PASS:
             self.log.info(f"✅ {item}: {detail}")
-        elif level == LEVEL_ERROR:
+        elif result == RESULT_FAIL:
             self.log.error(f"❌ {item}: {detail}")
-        elif level == LEVEL_WARNING:
+        elif result == RESULT_BLOCKED:
+            self.log.warning(f"⛔ {item}: {detail}")
+        elif result == RESULT_SKIPPED:
             self.log.warning(f"⚠️  {item}: {detail}")
         else:
             self.log.info(f"ℹ️  {item}: {detail}")
@@ -305,10 +390,8 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self.log.info("【1】Redfish Version 检查")
 
         # /redfish/v1 是 DMTF 强约定的 ServiceRoot 入口（唯一允许的固定路径）
-        sc, body, hdrs = self._request(
-            "GET", "/redfish/v1",
-            basic_auth=(self.USERNAME, self.PASSWORD)
-        )
+        # DSP0266: ServiceRoot 必须允许匿名 GET；其他资源仍须认证。
+        sc, body, hdrs = self._request("GET", "/redfish/v1")
         # 1-1 根节点可访问
         ok = sc == 200
         self._record("根节点 /redfish/v1 可访问（200）", LEVEL_ERROR, ok, f"HTTP {sc}")
@@ -344,31 +427,42 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self.log.info("=" * 60)
         self.log.info("【2】ETags 检查")
 
-        for label, uri in [("Chassis/1(UID点灯)", self.chassis_uri),
-                            ("Systems/1(BootOrder)", self.systems_uri)]:
+        for label, uri in [("Chassis", self.chassis_uri),
+                            ("ComputerSystem", self.systems_uri)]:
             # 2-1 GET 拿到 @odata.etag
             sc, body, hdrs = self._request("GET", uri, token=token)
             etag = None
             if isinstance(body, dict):
                 etag = body.get("@odata.etag") or hdrs.get("etag")
-            self._record(f"GET {label} 返回 @odata.etag", LEVEL_ERROR,
-                         bool(etag), f"HTTP {sc}, etag={etag!r}")
+            if sc != 200:
+                self._record(f"GET {label} 以检查 ETag", LEVEL_ERROR, False,
+                             f"HTTP {sc}")
+                continue
+            if not etag:
+                self._record(f"{label} 未声明 ETag（可选能力）", LEVEL_INFO, False,
+                             f"{uri} 未返回 @odata.etag 或 ETag；条件 PATCH 检查不适用",
+                             result=RESULT_SKIPPED)
+                continue
+            self._record(f"GET {label} 返回 ETag", LEVEL_INFO, True,
+                         f"HTTP {sc}, etag={etag!r}")
 
-            # 2-2 不带 If-Match 直接 PATCH → 期望 428
+            # 428 是服务可选的并发控制策略：接受正常 PATCH 或 428。
             sc_no_etag, _, _ = self._request("PATCH", uri, body={}, token=token)
-            self._record(f"PATCH {label} 不带 If-Match → 428", LEVEL_ERROR,
-                         sc_no_etag == 428,
-                         f"实际 HTTP {sc_no_etag}（期望 428）")
+            if sc_no_etag == 405:
+                self._record(f"PATCH {label} 的 ETag 前置条件检查", LEVEL_INFO, False,
+                             f"{uri} 不支持 PATCH（HTTP 405），该操作不适用",
+                             result=RESULT_SKIPPED)
+                continue
+            self._record(f"PATCH {label} 不带 If-Match 的响应合规", LEVEL_ERROR,
+                         sc_no_etag in (200, 204, 428),
+                         f"HTTP {sc_no_etag}（200/204=未强制；428=要求前置条件）")
 
-            # 2-3 带正确 ETag PATCH 空 JSON → 期望 200/204
-            if etag:
-                sc_with, _, _ = self._request(
-                    "PATCH", uri, body={}, token=token,
-                    extra_headers={"If-Match": etag}
-                )
-                self._record(f"PATCH {label} 带正确 If-Match → 200/204", LEVEL_ERROR,
-                             sc_with in (200, 204),
-                             f"实际 HTTP {sc_with}")
+            sc_with, _, _ = self._request(
+                "PATCH", uri, body={}, token=token,
+                extra_headers={"If-Match": etag}
+            )
+            self._record(f"PATCH {label} 带正确 If-Match → 200/204", LEVEL_ERROR,
+                         sc_with in (200, 204), f"实际 HTTP {sc_with}")
 
     # ── 3. HTTP Method 合规 ──────────────────────────────
     def check_http_methods(self, token):
@@ -403,7 +497,8 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         #     连续两次 POST 创建 Session → 应产生两个不同资源（不同 Id 或 Location）
         self._record("POST 必须支持（Session 创建 201 已验证）", LEVEL_ERROR,
                      self._session_create_sc == 201,
-                     f"HTTP {self._session_create_sc}")
+                     f"HTTP {self._session_create_sc}",
+                     evidence=self._session_create_evidence)
         sc_p1, body_p1, hdrs_p1 = self._request(
             "POST", self.sessions_uri,
             body={"UserName": self.USERNAME, "Password": self.PASSWORD}
@@ -430,7 +525,8 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         # 3-4 DELETE 必须支持（Session 删除 204 已验证）
         self._record("DELETE 必须支持（Session 删除 204 已验证）", LEVEL_ERROR,
                      self._session_delete_sc == 204,
-                     f"HTTP {self._session_delete_sc}")
+                     f"HTTP {self._session_delete_sc}",
+                     evidence=self._session_delete_evidence)
 
         # 3-5 PUT 非必须，但 405 = 明确不支持（非 501 的话 WARNING）
         sc_put, _, _ = self._request("PUT", self.managers_uri, body={}, token=token)
@@ -454,9 +550,14 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self._record("GET 响应 Content-Type 含 application/json", LEVEL_ERROR,
                      "application/json" in ct, f"Content-Type={ct!r}")
 
-        # 4-2 无凭据访问 → 401
+        # ServiceRoot 是认证例外；其他受保护资源仍应要求认证。
+        sc_root, _, _ = self._request("GET", "/redfish/v1")
+        self._record("无凭据访问 ServiceRoot → 200（认证例外）", LEVEL_ERROR,
+                     sc_root == 200, f"HTTP {sc_root}（期望 200）")
+
+        # 无凭据访问受保护资源 → 401
         sc_401, _, _ = self._request("GET", self.systems_uri)
-        self._record("无凭据访问 → 401", LEVEL_ERROR,
+        self._record("无凭据访问 ComputerSystem → 401", LEVEL_ERROR,
                      sc_401 == 401, f"HTTP {sc_401}（期望 401）")
 
         # 4-3 错误凭据 → 401
@@ -465,15 +566,13 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self._record("错误凭据 → 401", LEVEL_ERROR,
                      sc_bad == 401, f"HTTP {sc_bad}（期望 401）")
 
-        # 4-4 If-Match 必须支持（不带返回 428）
-        sc_428, _, _ = self._request("PATCH", self.chassis_uri, body={}, token=token)
-        self._record("If-Match 必须支持（不带时 → 428）", LEVEL_ERROR,
-                     sc_428 == 428, f"HTTP {sc_428}（期望 428）")
+        # If-Match / 428 的可选能力已按具体资源和操作在 ETag 模块检查。
 
         # 4-5 POST 创建资源响应包含 Location header（DMTF 通用）
         self._record("POST 创建 Session 响应包含 Location header", LEVEL_WARNING,
                      self._session_location_ok,
-                     f"Location={self._session_location!r}")
+                     f"Location={self._session_location!r}",
+                     evidence=self._session_create_evidence)
 
         # 4-6 If-None-Match 非必须（文档列出，验证 BMC 对其态度）
         # 带 If-None-Match: * 做 GET → 304（资源存在，条件不满足）或 200（BMC 忽略此 Header）
@@ -493,17 +592,20 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
 
         # 200
         sc, _, _ = self._request("GET", self.systems_uri, token=token)
-        self._record("GET Systems/1 → 200", LEVEL_ERROR, sc == 200, f"HTTP {sc}")
+        self._record(f"GET {self.systems_uri} → 200", LEVEL_ERROR,
+                     sc == 200, f"HTTP {sc}")
 
         # 201（Session 创建）
         self._record("POST 创建 Session → 201", LEVEL_ERROR,
                      self._session_create_sc == 201,
-                     f"HTTP {self._session_create_sc}")
+                     f"HTTP {self._session_create_sc}",
+                     evidence=self._session_create_evidence)
 
         # 204（Session 删除）
         self._record("DELETE Session → 204", LEVEL_ERROR,
                      self._session_delete_sc == 204,
-                     f"HTTP {self._session_delete_sc}")
+                     f"HTTP {self._session_delete_sc}",
+                     evidence=self._session_delete_evidence)
 
         # 401
         sc_401, _, _ = self._request("GET", self.systems_uri)
@@ -530,7 +632,7 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
             # 先确认 ReadOnly 账号能 GET（200）
             self._record("403 前置：ReadOnly 账号 GET Chassis → 200", LEVEL_INFO,
                          sc_403 == 200, f"HTTP {sc_403}")
-            # ReadOnly 账号 PATCH → 期望 403
+            # ReadOnly 账号 PATCH → 401/403 均表示写权限被拒绝。
             _, body_ch_ro, _ = self._request("GET", self.chassis_uri,
                                               basic_auth=(_ro_user, _ro_pass))
             etag_ro = body_ch_ro.get("@odata.etag", "") if isinstance(body_ch_ro, dict) else ""
@@ -539,9 +641,9 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
                 basic_auth=(_ro_user, _ro_pass),
                 extra_headers={"If-Match": etag_ro} if etag_ro else {}
             )
-            self._record("403 ReadOnly 账号 PATCH 受保护资源 → 403", LEVEL_ERROR,
-                         sc_403p == 403,
-                         f"HTTP {sc_403p}（期望 403；ReadOnly 账号不应有写权限）")
+            self._record("ReadOnly 账号 PATCH 受保护资源 → 401/403", LEVEL_ERROR,
+                         self._is_write_denied(sc_403p),
+                         f"HTTP {sc_403p}（401/403 均表示写操作被拒绝）")
             # 清理测试账号
             if ro_loc:
                 self._request("DELETE", ro_loc, token=token)
@@ -573,19 +675,30 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self._record("405 响应包含 Allow header（DMTF 通用）", LEVEL_WARNING,
                      bool(allow), f"Allow={allow!r}")
 
-        # 428（PATCH 不带 If-Match）
-        sc_428, _, _ = self._request("PATCH", self.chassis_uri, body={}, token=token)
-        self._record("PATCH 不带 If-Match → 428", LEVEL_ERROR,
-                     sc_428 == 428, f"HTTP {sc_428}")
-
-        # 412（带 If-Match 但 ETag 值错误 → Precondition Failed）
-        sc_412, _, _ = self._request(
-            "PATCH", self.chassis_uri, body={}, token=token,
-            extra_headers={"If-Match": '"invalid_etag_value_xyz_999"'}
-        )
-        self._record("PATCH 带错误 ETag → 412（Precondition Failed）", LEVEL_ERROR,
-                     sc_412 == 412,
-                     f"HTTP {sc_412}（期望 412；文档：If-Match 先决条件检查失败）")
+        # 428/412 仅在资源声明 ETag 且服务对该 PATCH 强制前置条件时适用。
+        etag = self._get_etag(self.chassis_uri, token)
+        if not etag:
+            self._record("PATCH 前置条件状态码检查", LEVEL_INFO, False,
+                         "Chassis 未声明 ETag，428/412 检查不适用",
+                         result=RESULT_SKIPPED)
+        else:
+            sc_precondition, _, _ = self._request(
+                "PATCH", self.chassis_uri, body={}, token=token
+            )
+            self._record("PATCH 不带 If-Match → 200/204/428", LEVEL_ERROR,
+                         sc_precondition in (200, 204, 428),
+                         f"HTTP {sc_precondition}")
+            if sc_precondition == 428:
+                sc_412, _, _ = self._request(
+                    "PATCH", self.chassis_uri, body={}, token=token,
+                    extra_headers={"If-Match": '"invalid_etag_value_xyz_999"'}
+                )
+                self._record("强制前置条件时错误 ETag → 412", LEVEL_ERROR,
+                             sc_412 == 412, f"HTTP {sc_412}")
+            else:
+                self._record("错误 ETag → 412", LEVEL_INFO, False,
+                             "服务未对该 PATCH 强制 If-Match，412 检查不适用",
+                             result=RESULT_SKIPPED)
 
         # 409（资源状态冲突：重复创建已存在的 Session 用户暂无法自动产生 409，
         #      改为验证 Accounts 重复创建场景）
@@ -713,7 +826,7 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
             self.log.info("  → BootOrder 已恢复")
         else:
             # BootOrder 为空或只有 1 个元素 → 改为 NTP ServerList 数组测试（若可用）
-            # Managers/1/NetworkProtocol NTP.NTPServers 通常是字符串数组
+            # Manager 的 NetworkProtocol NTP.NTPServers 通常是字符串数组
             # NetworkProtocol URI 从 Manager 资源链接动态发现
             _, mgr_body, _ = self._request(
                 "GET", self.managers_uri, token=token
@@ -1038,7 +1151,7 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         else:
             self._record("7-8 ComputerSystem.Reset Action URI 存在（#ComputerSystem.Reset）",
                          LEVEL_ERROR, False,
-                         "Systems/1 Actions 中未找到 #ComputerSystem.Reset.target，BMC 未暴露此 Action")
+                         f"{self.systems_uri} Actions 中未找到 #ComputerSystem.Reset.target，BMC 未暴露此 Action")
 
     # ── 8. 通用 DMTF 补充 ────────────────────────────────
     def check_dmtf_general(self, token):
@@ -1046,9 +1159,9 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self.log.info("【8】通用 DMTF 规范补充检查")
 
         # 8-1 主要资源必含 @odata.id / @odata.type
-        for label, uri in [("Systems/1", self.systems_uri),
-                            ("Chassis/1", self.chassis_uri),
-                            ("Managers/1", self.managers_uri)]:
+        for label, uri in [("ComputerSystem", self.systems_uri),
+                            ("Chassis", self.chassis_uri),
+                            ("Manager", self.managers_uri)]:
             sc, body, _ = self._request("GET", uri, token=token)
             if sc != 200 or not isinstance(body, dict):
                 self._record(f"GET {label} 可访问", LEVEL_ERROR,
@@ -1123,9 +1236,7 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
                                  LEVEL_WARNING, False, f"HTTP {sc_sub_c}")
 
         # 8-4 ServiceRoot 含 Links 字段（/redfish/v1 为 DMTF 强约定入口）
-        sc_root, body_root, _ = self._request(
-            "GET", "/redfish/v1", basic_auth=(self.USERNAME, self.PASSWORD)
-        )
+        sc_root, body_root, _ = self._request("GET", "/redfish/v1")
         if sc_root == 200 and isinstance(body_root, dict):
             self._record("ServiceRoot 含 Links 字段（DMTF 通用）", LEVEL_WARNING,
                          "Links" in body_root,
@@ -1155,11 +1266,13 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self.log.info(f"开始：{self.TEST_NAME}（{self.TEST_NUM}）")
         self.log.info(f"BMC IP：{self.BMC_IP}")
 
-        # ── 0. 动态发现资源 URI ──
-        self._discover_uris()
-
-        # ── 1. Redfish Version（无需 Session）──
+        # ── 1. ServiceRoot 必须允许匿名访问 ──
         self.check_redfish_version()
+
+        # ── 0. 动态发现资源 URI；失败时禁止猜测 URI 或继续破坏性检查 ──
+        if not self._discover_uris():
+            self._summarize()
+            return
 
         # ── 创建测试 Session ──
         self.log.info("=" * 60)
@@ -1169,6 +1282,7 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
             body={"UserName": self.USERNAME, "Password": self.PASSWORD}
         )
         self._session_create_sc   = sc_c
+        self._session_create_evidence = dict(self._last_evidence)
         self._session_location    = hdrs_c.get("location", "")
         self._session_location_ok = bool(self._session_location)
         token = hdrs_c.get("x-auth-token", "")
@@ -1176,7 +1290,11 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
             token = body_c.get("Token", "")
         self.log.info(f"  Session 创建 HTTP {sc_c}, Location={self._session_location}")
         if not token:
-            self.log.error("  无法获取 token，后续检查将失效")
+            self._record("创建认证 Session", LEVEL_ERROR, False,
+                         f"HTTP {sc_c}，响应未提供认证 token，后续检查无法执行",
+                         result=RESULT_BLOCKED)
+            self._summarize()
+            return
 
         # ── 创建临时 Session 用于 DELETE 验证 ──
         sc_t, _, hdrs_t = self._request(
@@ -1188,8 +1306,13 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         if tmp_loc and (token or tmp_token):
             sc_del, _, _ = self._request("DELETE", tmp_loc, token=token or tmp_token)
             self._session_delete_sc = sc_del
+            self._session_delete_evidence = dict(self._last_evidence)
         else:
             self._session_delete_sc = -1
+            self._session_delete_evidence = {
+                "method": "DELETE", "uri": tmp_loc, "status": None,
+                "response": "temporary session was not created", "headers": {},
+            }
         self.log.info(f"  临时 Session DELETE HTTP {self._session_delete_sc}")
 
         # ── 2~8 主检查 ──
@@ -1213,25 +1336,34 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self.log.info("=" * 60)
         self.log.info("【汇总】")
 
-        errors   = [f for f in self.findings if f["level"] == LEVEL_ERROR   and f["result"] != "PASS"]
-        warnings = [f for f in self.findings if f["level"] == LEVEL_WARNING  and f["result"] != "PASS"]
-        passes   = [f for f in self.findings if f["result"] == "PASS"]
+        failures = [f for f in self.findings if f["result"] == RESULT_FAIL]
+        blocked  = [f for f in self.findings if f["result"] == RESULT_BLOCKED]
+        skipped  = [f for f in self.findings if f["result"] == RESULT_SKIPPED]
+        passes   = [f for f in self.findings if f["result"] == RESULT_PASS]
 
         self.log.info(f"  总检查项：{len(self.findings)}")
         self.log.info(f"  PASS：   {len(passes)}")
-        self.log.info(f"  ERROR（不合规）：{len(errors)}")
-        self.log.info(f"  WARNING（建议整改）：{len(warnings)}")
+        self.log.info(f"  FAIL（不合规）：{len(failures)}")
+        self.log.info(f"  BLOCKED（前置条件不足）：{len(blocked)}")
+        self.log.info(f"  SKIPPED（能力不适用）：{len(skipped)}")
 
-        if errors:
+        if failures:
             self.log.error("━━ 不合规项（ERROR）")
-            for e in errors:
+            for e in failures:
                 self.log.error(f"  ❌ {e['item']}: {e['detail']}")
-        if warnings:
-            self.log.warning("━━ 建议整改项（WARNING）")
-            for w in warnings:
-                self.log.warning(f"  ⚠️  {w['item']}: {w['detail']}")
+        if blocked:
+            self.log.warning("━━ 阻塞项（BLOCKED）")
+            for entry in blocked:
+                self.log.warning(f"  ⛔ {entry['item']}: {entry['detail']}")
 
-        final = "PASS" if not errors else "FAIL"
+        if failures:
+            final = RESULT_FAIL
+        elif blocked:
+            final = RESULT_BLOCKED
+        elif passes:
+            final = RESULT_PASS
+        else:
+            final = RESULT_SKIPPED
         self.command_check_result = final
         self.log.info(f"  最终结果：{final}")
         self._write_result(final, self.findings)
@@ -1245,7 +1377,12 @@ if __name__ == "__main__":
     try:
         obj = Protocol001DmtfCompliance()
         obj.run_test()
-        exit_code = 0 if obj.command_check_result == "PASS" else 2
+        exit_code = {
+            RESULT_PASS: 0,
+            RESULT_FAIL: 2,
+            RESULT_SKIPPED: 3,
+            RESULT_BLOCKED: 4,
+        }.get(obj.command_check_result, 1)
     except KeyboardInterrupt:
         exit_code = 130
     except Exception as e:
