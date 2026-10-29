@@ -21,15 +21,21 @@ import traceback
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
-from func.common_function import CommonFunction
+from func.common_function import CommonFunction, ipmitool_bin, ping_once
 from func.bmc_test_base import BmcTestBase
+from func.bmc_reset_state import (
+    ProbeResult,
+    ResetRecoveryStateMachine,
+    probe_redfish_service_root,
+)
 
 from redfish_sdk import RedfishClient, RedfishException
 
-PING_TIMEOUT = 300    # 业务要求：5min 内 IP ping 通（秒）
-REDFISH_TIMEOUT = 600 # 业务要求：10min 内 Redfish 恢复（秒）
-IPMI_TIMEOUT = 600    # 业务要求：10min 内 IPMI 接口恢复（秒）
-POLL_INTERVAL = 10    # 轮询间隔（秒）
+OUTAGE_TIMEOUT = 120   # Reset must cause an observable Redfish outage.
+PING_TIMEOUT = 300     # Network recovery phase deadline.
+REDFISH_TIMEOUT = 600  # Redfish recovery phase deadline.
+IPMI_TIMEOUT = 600     # IPMI recovery phase deadline.
+POLL_INTERVAL = 5
 
 class Managers007BmcReset(BmcTestBase):
     """BMC 冷/热重启功能测试
@@ -37,7 +43,7 @@ class Managers007BmcReset(BmcTestBase):
     用例编号：Redfish_Managers_007
     测试内容：
     - 调用 #Manager.Reset (ForceRestart) 重启 BMC
-    - 验证 5min 内 BMC IP ping 通
+    - 验证 BMC Redfish 服务确实发生中断
     - 验证 10min 内 Redfish 接口恢复（GET /redfish/v1/Systems/1 → Manufacturer）
     - 验证 10min 内 IPMI 接口恢复（ipmitool mc info）
     """
@@ -48,72 +54,42 @@ class Managers007BmcReset(BmcTestBase):
             config_path=os.path.join(os.getcwd(), "conf/bmc/managers/managers_007_bmc_reset.json"),
         )
 
-    def _wait_ping(self, test: CommonFunction) -> tuple:
-        """等待 BMC IP ping 通，返回 (success, elapsed_seconds)"""
-        test.print_log("INFO", f"等待 BMC IP ping 通（超时 {PING_TIMEOUT}s）...")
-        time.sleep(10)  # 刚发出 reset，稍等再开始 ping
-        start_time = time.time()
-        while time.time() - start_time < PING_TIMEOUT:
-            ret = subprocess.call(
-                ["ping", "-c", "1", "-W", "2", self.BMC_IP],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    def _probe_redfish(self) -> ProbeResult:
+        return probe_redfish_service_root(
+            RedfishClient,
+            self.BMC_IP,
+            self.USERNAME,
+            self.PASSWORD,
+        )
+
+    def _probe_ping(self) -> ProbeResult:
+        if ping_once(self.BMC_IP, timeout_sec=2):
+            return ProbeResult(True, "ICMP echo reply received")
+        return ProbeResult(False, "no ICMP echo reply")
+
+    def _probe_ipmi(self) -> ProbeResult:
+        try:
+            result = subprocess.run(
+                [ipmitool_bin(), "-I", "lanplus", "-H", self.BMC_IP,
+                 "-U", self.USERNAME, "-P", self.PASSWORD, "mc", "info"],
+                capture_output=True,
+                text=True,
+                timeout=15,
             )
-            elapsed = int(time.time() - start_time)
-            if ret == 0:
-                test.print_log("INFO", f"BMC IP ping 通，耗时 {elapsed}s")
-                return True, elapsed
-            time.sleep(POLL_INTERVAL)
-        elapsed = int(time.time() - start_time)
-        test.print_log("ERROR", f"BMC IP ping 超时（{elapsed}s 内未 ping 通，要求 {PING_TIMEOUT}s）")
-        return False, elapsed
-
-    def _wait_redfish(self, test: CommonFunction, start_time: float) -> tuple:
-        """等待 Redfish 恢复，返回 (success, elapsed_seconds, manufacturer)"""
-        test.print_log("INFO", f"等待 Redfish 恢复（超时 {REDFISH_TIMEOUT}s）...")
-        while time.time() - start_time < REDFISH_TIMEOUT:
-            try:
-                client = RedfishClient(
-                    host=self.BMC_IP,
-                    username=self.USERNAME,
-                    password=self.PASSWORD
-                )
-                manufacturer = client.get_manufacturer()
-                client.close()
-                elapsed = int(time.time() - start_time)
-                test.print_log("INFO", f"Redfish 恢复，耗时 {elapsed}s，Manufacturer={manufacturer}")
-                return True, elapsed, manufacturer
-            except Exception:
-                pass
-            time.sleep(POLL_INTERVAL)
-        elapsed = int(time.time() - start_time)
-        test.print_log("ERROR", f"Redfish 超时（{elapsed}s 内未恢复，要求 {REDFISH_TIMEOUT}s）")
-        return False, elapsed, None
-
-    def _wait_ipmi(self, test: CommonFunction, start_time: float) -> tuple:
-        """等待 IPMI 接口恢复，返回 (success, elapsed_seconds, mc_info)"""
-        test.print_log("INFO", f"等待 IPMI 接口恢复（超时 {IPMI_TIMEOUT}s）...")
-        while time.time() - start_time < IPMI_TIMEOUT:
-            try:
-                result = subprocess.run(
-                    ["ipmitool", "-I", "lanplus", "-H", self.BMC_IP,
-                     "-U", self.USERNAME, "-P", self.PASSWORD, "mc", "info"],
-                    capture_output=True, text=True, timeout=15
-                )
-                elapsed = int(time.time() - start_time)
-                if result.returncode == 0 and result.stdout.strip():
-                    # 提取关键信息（Firmware Revision / Manufacturer ID）
-                    mc_lines = [l.strip() for l in result.stdout.splitlines()
-                                if any(k in l for k in ["Firmware Revision", "Manufacturer ID", "Product Name"])]
-                    test.print_log("INFO", f"IPMI mc info 恢复，耗时 {elapsed}s")
-                    for line in mc_lines:
-                        test.print_log("INFO", f"  {line}")
-                    return True, elapsed, mc_lines
-            except Exception:
-                pass
-            time.sleep(POLL_INTERVAL)
-        elapsed = int(time.time() - start_time)
-        test.print_log("ERROR", f"IPMI 超时（{elapsed}s 内未恢复，要求 {IPMI_TIMEOUT}s）")
-        return False, elapsed, None
+            if result.returncode == 0 and result.stdout.strip():
+                mc_lines = [
+                    line.strip()
+                    for line in result.stdout.splitlines()
+                    if any(key in line for key in (
+                        "Firmware Revision", "Manufacturer ID", "Product Name"
+                    ))
+                ]
+                detail = "; ".join(mc_lines) or "ipmitool mc info succeeded"
+                return ProbeResult(True, detail)
+            error = (result.stderr or result.stdout or "empty response").strip()
+            return ProbeResult(False, f"exit={result.returncode}: {error[:160]}")
+        except Exception as exc:
+            return ProbeResult(False, f"{type(exc).__name__}: {str(exc)[:160]}")
 
     def run_test(self):
         test = CommonFunction()
@@ -136,36 +112,43 @@ class Managers007BmcReset(BmcTestBase):
             # 2. 调用 Manager.Reset 重启 BMC（走 BMC 管理控制器，不是服务器整机）
             # SDK 1.3.0 reset_manager() 使用 Manager 资源自身广播的 Reset target，
             # 与 Systems 的 Reset（重启整机）完全独立
-            test.print_log("INFO", "发起 BMC 重启（ForceRestart）-> reset_manager()")
-            self.client.reset_manager(reset_type="ForceRestart")
-            self.client.close()
-            self.client = None
-            test.print_log("INFO", "BMC 重启命令已发送（仅重启 BMC 管理控制器，不影响服务器）")
-            checks.append(("BMC Reset 命令发送成功", True))
+            test.print_log("INFO", "Sending BMC reset (ForceRestart) via reset_manager()")
+            request_accepted = False
+            request_detail = "reset_manager did not return"
+            try:
+                self.client.reset_manager(reset_type="ForceRestart")
+                request_accepted = True
+                request_detail = "reset_manager completed successfully"
+            except Exception as exc:
+                request_detail = f"{type(exc).__name__}: {str(exc)[:160]}"
+            finally:
+                try:
+                    self.client.close()
+                except Exception:
+                    pass
+                self.client = None
 
-            # 3. 记录重置时间起点（从发出 Reset 命令开始计时）
-            reset_start = time.time()
-            recovery_info = {}
-
-            # 4. 验证 5min 内 IP ping 通
-            ping_ok, ping_elapsed = self._wait_ping(test)
-            checks.append((f"BMC IP ping 通（要求≤{PING_TIMEOUT}s，实际{ping_elapsed}s）", ping_ok))
-            recovery_info["ping_elapsed_s"] = ping_elapsed
-            recovery_info["ping_ok"] = ping_ok
-
-            # 5. 验证 10min 内 Redfish 恢复（用 get_manufacturer() 验证）
-            redfish_ok, redfish_elapsed, manufacturer = self._wait_redfish(test, reset_start)
-            checks.append((f"Redfish 恢复（要求≤{REDFISH_TIMEOUT}s，实际{redfish_elapsed}s）", redfish_ok))
-            recovery_info["redfish_elapsed_s"] = redfish_elapsed
-            recovery_info["redfish_ok"] = redfish_ok
-            recovery_info["manufacturer"] = manufacturer
-
-            # 6. 验证 10min 内 IPMI 恢复（ipmitool mc info）
-            ipmi_ok, ipmi_elapsed, mc_info = self._wait_ipmi(test, reset_start)
-            checks.append((f"IPMI 恢复（要求≤{IPMI_TIMEOUT}s，实际{ipmi_elapsed}s）", ipmi_ok))
-            recovery_info["ipmi_elapsed_s"] = ipmi_elapsed
-            recovery_info["ipmi_ok"] = ipmi_ok
-            recovery_info["mc_info"] = mc_info
+            state_machine = ResetRecoveryStateMachine(logger=test.print_log)
+            recovery = state_machine.run(
+                request_accepted=request_accepted,
+                request_detail=request_detail,
+                redfish_probe=self._probe_redfish,
+                ipmi_probe=self._probe_ipmi,
+                network_probe=self._probe_ping,
+                outage_timeout=OUTAGE_TIMEOUT,
+                network_timeout=PING_TIMEOUT,
+                redfish_timeout=REDFISH_TIMEOUT,
+                ipmi_timeout=IPMI_TIMEOUT,
+                poll_interval=POLL_INTERVAL,
+            )
+            checks.extend([
+                ("BMC Reset request accepted", recovery.request_accepted),
+                ("Redfish service outage observed", recovery.outage_observed),
+                ("BMC network recovered", recovery.network_recovered is True),
+                ("Redfish service recovered", recovery.redfish_recovered),
+                ("IPMI service recovered", recovery.ipmi_recovered),
+            ])
+            recovery_info = recovery.to_dict()
 
             final = "PASS" if all(r for _, r in checks) else "FAIL"
 
