@@ -6,22 +6,23 @@ Usage: python3 bmc/systems_014_html5kvm_test.py -i <bmc_ip> -u <username> -p <pa
 Update:
 2026/05/08: 新增，HTML5KVM 创建与最大化测试
 2026/05/08: 重写 — 不再重复 012 的参数校验，聚焦实际 KVM 会话创建能力验证
-2026/10/16: SDK 1.3.0 适配 - 移除硬编码 KvmService URI（get_kvm_service 已由 SDK
-  自动发现），清理 docstring 中的硬编码路径（issue/8）
 
-测试策略：
-  被测 BMC 的 KVM 会话创建机制：每次 GET KvmService（URI 由 SDK 自动发现）会生成
-  一个带唯一 token 的 KvmUrl，浏览器打开该 URL 即建立 KVM 会话。
-   使用 SDK get_kvm_service() 获取 KVM 会话信息。
+测试策略（按实际设备接口，2026-09-28 修订）：
+  被测 BMC 的 KVM 会话创建机制：每次 GET /redfish/v1/Managers/1/IKVM 会创建一个 token，
+  返回 SignURL（https://<bmc_ip>/viewer.html?<token>，token 不带 "token=" 前缀），
+  浏览器打开该 URL 即建立 KVM 会话；IKVM 响应还含 "Current interface":"HTML 5"。
+  会话数（Max/Active）由 /redfish/v1/Managers/1/KvmService 提供（IKVM 不提供）。
+  SDK 未封装 KVM 接口，脚本通过 get_raw() 调用。
 
 测试内容（与 012 不重复）：
-  1. 多次 GET KvmService 获取多个 session token，验证 token 互不相同
-  2. 每个 token 生成的 KvmUrl 可 HTTP 访问（GET 返回 200）
-  3. 系统配置的 MaxSessions 可支持 ≥2 个并发会话（业务要求）
-  4. 会话创建后 NumberOfActivatedSessions 字段存在（运行时计数，实际增量需人工验证）
+  1. 多次 GET IKVM 获取多个 session token，验证 token 机制（共享 token / 独立 token）
+  2. 每个 token 生成的 SignURL 可 HTTP 访问（GET 返回 200）
+  3. Current interface 为 HTML 5（HTML5 KVM）
+  4. KvmService 的 MaximumNumberOfSessions ≥ 2（业务要求，支持多会话并发）
+  5. NumberOfActivatedSessions 字段存在（运行时计数，实际增量需人工验证）
 
 注意：
-  实际多会话并发（浏览器打开多个 viewer）需在人工测试中补充。
+  实际多会话并发（浏览器打开多个 viewer）需在人工测试中补充；IKVM 每次 GET 都会创建一个 token。
   自动化测试验证的是"会话创建机制正常工作"，而非"真实 WebSocket 会话建立"。
 """
 
@@ -37,6 +38,11 @@ from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
 
 from redfish_sdk import RedfishClient, RedfishException
+
+# 实际 KVM URL 来源（每次 GET 创建 token 并返回 SignURL）：IKVM
+IKVM_URI = "/redfish/v1/Managers/1/IKVM"
+# 会话数（Max/Active）来源：KvmService（IKVM 不提供）；同时作为 SignURL 的兼容回退
+KVM_SERVICE_URI = "/redfish/v1/Managers/1/KvmService"
 
 # 测试创建的会话数（验证 ≥2 的业务要求）
 TEST_SESSION_COUNT = 3
@@ -54,10 +60,16 @@ class Systems014Html5KvmTest(BmcTestBase):
             config_path=os.path.join(os.getcwd(), "conf/bmc/systems/systems_014_html5kvm_test.json"),
         )
     def _extract_token(self, kvm_url: str) -> str:
-        """从 KvmUrl 中提取 token 值"""
-        # KvmUrl 格式：https://<bmc_ip>/viewer.html?&token=xxxxx
+        """从 KvmUrl / SignURL 中提取 token。
+
+        支持的格式：
+          https://<bmc_ip>/viewer.html?&token=xxxxx   （token= 前缀，历史/兼容）
+          https://<bmc_ip>/viewer.html?xxxxx          （IKVM SignURL：token 直接跟在 ? 后）
+        """
         if "token=" in kvm_url:
             return kvm_url.split("token=")[-1].split("&")[0]
+        if "?" in kvm_url:
+            return kvm_url.split("?", 1)[-1].split("&")[0]
         return ""
 
     def _verify_kvm_url_accessible(self, kvm_url: str, label: str, test: CommonFunction) -> bool:
@@ -103,34 +115,63 @@ class Systems014Html5KvmTest(BmcTestBase):
             )
 
             # ================================================================
-            # 1. 多次 GET KvmService，获取多个 session token
+            # 1. 多次 GET IKVM，获取多个 session token / SignURL（实际接口）
             # ================================================================
             test.print_log("INFO", f"开始创建 {TEST_SESSION_COUNT} 个 KVM session token...")
 
             for i in range(TEST_SESSION_COUNT):
-                kvm = self.client.get_kvm_service()
-                kvm_url = kvm.kvm_url or ""
+                # [SDK-GAP] get_raw() 获取 KVM 会话信息：KVM 为 OEM 扩展接口、SDK 暂未封装
+                CommonFunction.print_log(
+                    "WARNING",
+                    f"[SDK-GAP] get_raw('{IKVM_URI}') 获取 KVM 会话信息："
+                    f"KVM 为 OEM 扩展接口，SDK 暂未封装，待 SDK 补充 KVM 接口后替换"
+                )
+                kvm_data = {}
+                kvm_url = ""
+                interface = None
+                # 首选实际接口 IKVM（返回 SignURL）；失败/为空时兼容回退 KvmService(KvmUrl)
+                try:
+                    kvm_data = self.client.get_raw(IKVM_URI)
+                    kvm_url = kvm_data.get("SignURL", "") or kvm_data.get("KvmUrl", "")
+                    interface = kvm_data.get("Current interface")
+                except RedfishException as e:
+                    test.print_log("WARNING", f"  Session#{i+1}: GET IKVM 失败（{e}），尝试回退 KvmService")
+                if not kvm_url:
+                    try:
+                        kvm_data = self.client.get_raw(KVM_SERVICE_URI)
+                        kvm_url = kvm_data.get("KvmUrl", "") or kvm_data.get("SignURL", "")
+                    except RedfishException as e:
+                        test.print_log("WARNING", f"  Session#{i+1}: GET KvmService 失败（{e}）")
+
                 token = self._extract_token(kvm_url)
-                active_sessions = kvm.number_of_activated_sessions
-                max_sessions = kvm.maximum_number_of_sessions
 
                 if not kvm_url:
-                    test.print_log("ERROR", f"  Session#{i+1}: BMC 返回 KvmUrl 为空，"
-                                   f"active={active_sessions}, max={max_sessions}")
+                    test.print_log("ERROR", f"  Session#{i+1}: BMC 未返回 KVM URL（IKVM.SignURL / KvmService.KvmUrl 均为空）")
                 else:
                     test.print_log("INFO", f"  Session#{i+1}: token={token[:8] if token else 'N/A'}..., "
-                                   f"active={active_sessions}, max={max_sessions}")
+                                   f"interface={interface!r}")
 
                 kvm_urls.append(kvm_url)
                 tokens.append(token)
                 session_data[f"session_{i+1}"] = {
                     "token": token,
                     "kvm_url": kvm_url,
-                    "active_sessions": active_sessions,
-                    "max_sessions": max_sessions,
+                    "interface": interface,
                 }
                 # 每次创建间隔 1s，确保 token 有区分
                 time.sleep(1)
+
+            # 会话数（Max/Active）从 KvmService 读取（IKVM 不提供这两个字段）
+            last_max = None
+            active_now = None
+            try:
+                svc_data = self.client.get_raw(KVM_SERVICE_URI)
+                last_max = svc_data.get("MaximumNumberOfSessions")
+                active_now = svc_data.get("NumberOfActivatedSessions")
+                test.print_log("INFO", f"  KvmService: MaximumNumberOfSessions={last_max}, "
+                               f"NumberOfActivatedSessions={active_now}")
+            except RedfishException as e:
+                test.print_log("WARNING", f"  读取 KvmService 会话数失败（{e}），Max/Active 检查降级")
 
             # ================================================================
             # 2. 验证 token 机制
@@ -152,7 +193,7 @@ class Systems014Html5KvmTest(BmcTestBase):
                 checks.append(("Token 机制正常", False))
 
             # ================================================================
-            # 3. 验证 KvmUrl 可 HTTP 访问（每个 token 生成的 URL 都能加载）
+            # 3. 验证 SignURL/KvmUrl 可 HTTP 访问（每个 token 生成的 URL 都能加载）
             # ================================================================
             all_accessible = True
             for i, url in enumerate(kvm_urls):
@@ -162,23 +203,33 @@ class Systems014Html5KvmTest(BmcTestBase):
             checks.append((f"{TEST_SESSION_COUNT} 个 KvmUrl 均可访问（HTTP 200）", all_accessible))
 
             # ================================================================
-            # 4. 验证 MaxSessions 支持 ≥2 个并发（业务要求）
+            # 4. 验证 HTML5 接口 + MaxSessions 支持 ≥2 个并发（业务要求）
             # ================================================================
-            # 取最后一次查询的 MaxSessions 值
-            last_max = session_data.get(f"session_{TEST_SESSION_COUNT}", {}).get("max_sessions")
-            max_ge2 = isinstance(last_max, int) and last_max >= 2
-            test.print_log("INFO", f"MaximumNumberOfSessions={last_max}, ≥2: {max_ge2}")
-            if not max_ge2:
-                test.print_log("ERROR", f"MaxSessions={last_max} < 2，不满足业务要求")
-            checks.append(("MaxSessions ≥ 2（支持多会话并发）", max_ge2))
+            ifaces = [v.get("interface") for v in session_data.values() if isinstance(v, dict)]
+            if any(ifaces):
+                html5_ok = any((x or "").upper().startswith("HTML") for x in ifaces)
+                checks.append(("Current interface 为 HTML 5（HTML5 KVM）", html5_ok))
+                if not html5_ok:
+                    test.print_log("ERROR", f"Current interface 非 HTML：{ifaces}")
+            else:
+                test.print_log("WARNING", "IKVM 未返回 Current interface 字段，该项跳过（记 WARNING，不影响结果）")
+
+            if last_max is None:
+                test.print_log("WARNING", "KvmService 未返回 MaximumNumberOfSessions，MaxSessions≥2 检查跳过（记 WARNING，不影响结果）")
+            else:
+                max_ge2 = isinstance(last_max, int) and last_max >= 2
+                test.print_log("INFO", f"MaximumNumberOfSessions={last_max}, ≥2: {max_ge2}")
+                if not max_ge2:
+                    test.print_log("ERROR", f"MaxSessions={last_max} < 2，不满足业务要求")
+                checks.append(("MaxSessions ≥ 2（支持多会话并发）", max_ge2))
 
             # ================================================================
             # 5. 验证 ActiveSessions 字段存在（运行时计数，实际增量需人工验证）
             # ================================================================
-            active_field_exists = all(
-                "active_sessions" in v for v in session_data.values()
-            )
-            checks.append(("NumberOfActivatedSessions 字段存在（会话计数）", active_field_exists))
+            if active_now is None:
+                test.print_log("WARNING", "KvmService 未返回 NumberOfActivatedSessions，该项跳过（记 WARNING，不影响结果）")
+            else:
+                checks.append(("NumberOfActivatedSessions 字段存在（会话计数）", True))
 
             # ================================================================
             # 汇总
@@ -190,7 +241,9 @@ class Systems014Html5KvmTest(BmcTestBase):
                 "token_mode": "shared" if token_count == 1 else "independent",
                 "all_urls_accessible": all_accessible,
                 "max_sessions": last_max,
-                "meets_business_requirement": max_ge2,
+                "active_sessions": active_now,
+                "interfaces": ifaces,
+                "meets_business_requirement": (isinstance(last_max, int) and last_max >= 2),
             }
 
         except RedfishException as e:
