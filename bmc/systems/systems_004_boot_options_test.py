@@ -6,11 +6,15 @@ Usage: python3 bmc/systems_004_boot_options_test.py -i <bmc_ip> -u <username> -p
 Update:
 2026/04/22: 新增
 2026/06/23: 新模型改写为 redfish_sdk v1.1.0（get_boot_options/get_boot_option/set_boot_option_enabled）
+2026/10/15: 浪潮（inspur/maginfra）机型固定走旧模型：BMC 未输出
+            BootSourceOverrideTarget@Redfish.AllowableValues 注解时，目标集改用内置兜底列表
+            （conf 的 LegacyFallbackTargets 可覆盖）
 
 校验策略：
 
   【旧模型 - BootSourceOverride】（SDK 原生支持）
-  Boot.allowable_values 非空时走此路径：
+  Boot.allowable_values（=BootSourceOverrideTarget@Redfish.AllowableValues）非空时走此路径；
+  浪潮机型无该注解但存在 BootSourceOverrideTarget 字段时，同样走此路径（目标集用兜底列表）：
   1. GET /redfish/v1/Systems/1，读取 BootSourceOverrideTarget 当前值和 AllowableValues
   2. 遍历每个 AllowableValue，通过 SDK change_boot_source() PATCH，回读验证
   3. 测试后恢复原始值
@@ -37,8 +41,17 @@ from func.bmc_test_base import BmcTestBase
 
 from redfish_sdk import RedfishClient, RedfishException, RedfishValidationError  # noqa: F401
 
+try:
+    from redfish_sdk.managers.update_strategies import VendorDetector
+except Exception:  # SDK 版本差异兜底：无 VendorDetector 时用 Manufacturer 关键字判断
+    VendorDetector = None
+
 # 必要启动项：切换失败 → ERROR + 计入 FAIL
 REQUIRED_BOOT_TARGETS = {"None", "Pxe", "Hdd", "Cd", "BiosSetup"}
+
+# 旧模型兜底目标集：BMC 未输出 BootSourceOverrideTarget@Redfish.AllowableValues 时使用
+# （浪潮/inspur 机型固定走旧模型；可用 conf 的 LegacyFallbackTargets 覆盖）
+DEFAULT_LEGACY_TARGETS = ["None", "Pxe", "Hdd", "Cd", "BiosSetup"]
 
 class BootOptionsTest(BmcTestBase):
     """Systems BootOptions 操作测试
@@ -58,6 +71,8 @@ class BootOptionsTest(BmcTestBase):
         self.BOOT_ENABLED        = conf_section.get("BootEnabled",          "Once")
         self.RESTORE_TARGET      = conf_section.get("RestoreTarget",        "None")  # "None" 表示恢复测试前值
         self.READ_BACK_DELAY     = conf_section.get("ReadBackDelaySeconds", 2)
+        self.LEGACY_FALLBACK_TARGETS = (conf_section.get("LegacyFallbackTargets")
+                                        or DEFAULT_LEGACY_TARGETS)
 
     def close_sdk_client(self):
         if self.client:
@@ -72,12 +87,30 @@ class BootOptionsTest(BmcTestBase):
         CommonFunction.print_log("INFO", f"连接 BMC：{self.BMC_IP}")
         self.client = RedfishClient(self.BMC_IP, self.USERNAME, self.PASSWORD)
 
+    def _detect_vendor(self) -> str:
+        """厂商识别：优先 SDK VendorDetector（inspur/浪潮/maginfra → "inspur"）；
+        旧版 SDK 或调用异常时，退回 System.Manufacturer 字符串匹配。"""
+        if VendorDetector is not None:
+            try:
+                return VendorDetector.detect(self.client)
+            except Exception as e:
+                CommonFunction.print_log("WARNING", f"VendorDetector 识别失败：{e}")
+        try:
+            manufacturer = (self.client.get_system().manufacturer or "").lower()
+        except Exception as e:
+            CommonFunction.print_log("WARNING", f"读取 System.Manufacturer 失败：{e}")
+            return "generic"
+        for key in ("inspur", "浪潮", "maginfra"):
+            if key in manufacturer:
+                return "inspur"
+        return "generic"
+
     def _detect_model(self):
         """检测 BMC 使用的启动项模型
 
         :return: (model, context)
           model="legacy"  → context=(current_target, allowable_values)
-          model="new"     → context=boot_options_odata_id（集合 URL）
+          model="new"     → context=boot_options 列表
           model=None      → 两种模型均无法获取，测试中止
         """
         try:
@@ -87,12 +120,25 @@ class BootOptionsTest(BmcTestBase):
             CommonFunction.print_log("ERROR", f"读取 System 信息失败：{str(e)}")
             return None, None
 
-        # 旧模型：AllowableValues 内联在 Boot 块
+        vendor  = self._detect_vendor()
+        current = getattr(boot, "boot_source_override_target", None)
         allowable = getattr(boot, "allowable_values", None) or []
+        CommonFunction.print_log("INFO", f"厂商识别：{vendor}；BootSourceOverrideTarget={current!r}")
+
+        # 旧模型（BootSourceOverride）：
+        #  1) 首选：BootSourceOverrideTarget@Redfish.AllowableValues 注解存在 → 按注解遍历
+        #  2) 浪潮（inspur/maginfra）：无目标注解但 BootSourceOverrideTarget 字段存在
+        #     → 也走旧模型（目标集用内置兜底列表；该机型当前未输出 DMTF 标准目标注解）
         if allowable:
-            current = getattr(boot, "boot_source_override_target", None)
             CommonFunction.print_log("INFO", f"检测到旧模型（BootSourceOverride），AllowableValues={allowable}")
             return "legacy", (current, allowable)
+        if (vendor == "inspur") and (current is not None):
+            CommonFunction.print_log(
+                "WARNING",
+                f"厂商={vendor}：BMC 未输出 BootSourceOverrideTarget@Redfish.AllowableValues，"
+                f"按内置目标集走旧模型：{self.LEGACY_FALLBACK_TARGETS}"
+            )
+            return "legacy", (current, self.LEGACY_FALLBACK_TARGETS)
 
         # 新模型：BootOptions 集合资源（v1.1.0 get_boot_options）
         try:
