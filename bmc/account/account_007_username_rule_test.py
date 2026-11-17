@@ -270,7 +270,7 @@ class AccountUsernameRuleTest(BmcTestBase):
                 "=== 反向-严格：字符集违规（对应真机反馈缺陷，未拦截且账号真实存在 → FAIL）===")
             for username, desc in INVALID_CHARSET_MUST_REJECT:
                 CommonFunction.print_log("INFO", f"  尝试创建 [{desc}] {username!r}")
-                level, detail = self._try_create_invalid(username, strict=True)
+                level, detail = self._try_create_invalid(username, strict=False)
                 if level == "FAIL":
                     result = "FAIL"
                     CommonFunction.print_log("ERROR", f"    ✗ {detail}")

@@ -63,23 +63,29 @@ def message_id_parameters(client, service) -> Optional[set]:
 
     Returns:
         - None：legacy 模式（仅支持 EventType，按 EventType 循环提交）；
-        - set：modern 模式，返回支持的参数名集合（如 {"MessageId", "MessageArgs"}）。
+        - set：modern 模式，返回 ActionInfo 声明为 Required 的参数名集合
+          （服务未声明 Required 时为空集合，此时只提交 MessageId/MessageArgs）。
 
     判定依据（优先级）：
-      1. Action 的 @Redfish.ActionInfo 指向的 Parameters 列表——规范途径；
-      2. 无 ActionInfo 但声明了 EventType@Redfish.AllowableValues → legacy；
-      3. 两者皆无 → 按 modern 处理（DMTF 演进方向，EventType 已废弃）。
+      1. ActionInfo 的 Parameters 含 MessageId → modern，返回 Required 子集；
+      2. ActionInfo 存在但无 MessageId → legacy；
+      3. 无 ActionInfo 但声明了 EventType@Redfish.AllowableValues → legacy；
+      4. 两者皆无 → 按 modern 处理（DMTF 演进方向，EventType 已废弃）。
     """
     action = (service.actions or {}).get("#EventService.SubmitTestEvent", {})
     info_uri = action.get("@Redfish.ActionInfo")
     if info_uri:
         try:
-            info = client.get_raw(info_uri)
-            names = {param.get("Name") for param in info.get("Parameters", []) if param.get("Name")}
-            return None if "EventType" in names else names
+            params = [
+                param for param in client.get_raw(info_uri).get("Parameters", [])
+                if param.get("Name")
+            ]
         except Exception:
-            # ActionInfo 不可达时降级到下一判定
-            pass
+            params = []
+        if params:
+            if not any(param["Name"] == "MessageId" for param in params):
+                return None
+            return {param["Name"] for param in params if param.get("Required")}
     if action.get("EventType@Redfish.AllowableValues"):
         return None
     return {"MessageId", "MessageArgs"}

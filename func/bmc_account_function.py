@@ -25,7 +25,7 @@ from redfish_sdk.models import Account
 # 严格标准与宽松实现的 BMC 上都能运行。
 
 # 只读角色的候选名（按标准优先级排序）
-READONLY_ROLE_CANDIDATES = ["ReadOnly", "ReadOnlyUser", "User"]
+READONLY_ROLE_CANDIDATES = ["ReadOnly", "ReadOnlyUser", "User", "Commonuser"]
 
 
 def resolve_role_id(client: RedfishClient, preferred: str = "ReadOnly") -> str:

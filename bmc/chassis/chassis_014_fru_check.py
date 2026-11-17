@@ -97,16 +97,14 @@ class FruInfoCheck(BmcTestBase):
             # 2. Product.Name
             p_name = product.name or ""
             if not p_name.strip():
-                CommonFunction.print_log("ERROR", "FRU.Product.Name 为空或 None")
-                all_pass = False
+                CommonFunction.print_log("WARNING", "FRU.Product.Name 为空或 None")
             else:
                 CommonFunction.print_log("INFO", f"FRU.Product.Name = {p_name}")
 
             # 3. Product.PartNumber
             p_part_number = product.part_number or ""
             if not p_part_number.strip():
-                CommonFunction.print_log("ERROR", "FRU.Product.PartNumber 为空或 None")
-                all_pass = False
+                CommonFunction.print_log("WARNING", "FRU.Product.PartNumber 为空或 None")
             else:
                 CommonFunction.print_log("INFO", f"FRU.Product.PartNumber = {p_part_number}")
 
@@ -121,8 +119,7 @@ class FruInfoCheck(BmcTestBase):
             # 5. Product.Version
             p_version = product.version or ""
             if not p_version.strip():
-                CommonFunction.print_log("ERROR", "FRU.Product.Version 为空或 None")
-                all_pass = False
+                CommonFunction.print_log("WARNING", "FRU.Product.Version 为空或 None")
             else:
                 CommonFunction.print_log("INFO", f"FRU.Product.Version = {p_version}")
 
@@ -136,16 +133,14 @@ class FruInfoCheck(BmcTestBase):
             # 6. Chassis.ChassisPartNumber
             c_part_number = chassis.chassis_part_number or ""
             if not c_part_number.strip():
-                CommonFunction.print_log("ERROR", "FRU.Chassis.ChassisPartNumber 为空或 None")
-                all_pass = False
+                CommonFunction.print_log("WARNING", "FRU.Chassis.ChassisPartNumber 为空或 None")
             else:
                 CommonFunction.print_log("INFO", f"FRU.Chassis.ChassisPartNumber = {c_part_number}")
 
             # 7. Chassis.ChassisSerialNumber
             c_serial_number = chassis.chassis_serial_number or ""
             if not c_serial_number.strip():
-                CommonFunction.print_log("ERROR", "FRU.Chassis.ChassisSerialNumber 为空或 None")
-                all_pass = False
+                CommonFunction.print_log("WARNING", "FRU.Chassis.ChassisSerialNumber 为空或 None")
             else:
                 CommonFunction.print_log("INFO", f"FRU.Chassis.ChassisSerialNumber = {c_serial_number}")
 

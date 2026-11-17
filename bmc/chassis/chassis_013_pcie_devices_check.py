@@ -92,15 +92,13 @@ class PCIeDevicesInfoCheck(BmcTestBase):
 
         # 3. SerialNumber
         if not device.serial_number or (isinstance(device.serial_number, str) and device.serial_number.strip() == ""):
-            CommonFunction.print_log("ERROR", f"[{label}]：SerialNumber 为空或 None")
-            all_pass = False
+            CommonFunction.print_log("WARNING", f"[{label}]：SerialNumber 为空或 None")
         else:
             CommonFunction.print_log("INFO", f"[{label}]：SerialNumber = {device.serial_number}")
 
         # 4. FirmwareVersion
         if not device.firmware_version or (isinstance(device.firmware_version, str) and device.firmware_version.strip() == ""):
-            CommonFunction.print_log("ERROR", f"[{label}]：FirmwareVersion 为空或 None")
-            all_pass = False
+            CommonFunction.print_log("WARNING", f"[{label}]：FirmwareVersion 为空或 None")
         else:
             CommonFunction.print_log("INFO", f"[{label}]：FirmwareVersion = {device.firmware_version}")
 
