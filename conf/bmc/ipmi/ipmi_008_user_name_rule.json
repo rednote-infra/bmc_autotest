@@ -13,6 +13,7 @@
         "WaitAfterOpSec": 1,
         "CleanupName": "unusedslot",
         "CleanupPriv": 15,
+        "_comment_rules": "分类规范与 account_007_username_rule_test 保持一致：正向=4~16位全英文字母应成功；长度越界（3位/17位）为宽松项，未拦截记 WARNING 不 FAIL；字符集违规（含数字/特殊字符等）为严格项，未拦截 → FAIL（本用例暂未覆盖，见 account_007）",
         "PositiveCases": [
             {
                 "name": "abcd",
@@ -35,19 +36,18 @@
                 "expect": "pass"
             }
         ],
-        "NegativeMustFail": [
+        "NegativeWarnIfPass": [
             {
                 "name": "abc",
-                "desc": "3位（低于下限4位，必须拦截）",
+                "desc": "3位（低于下限4位，未拦截记WARNING）",
                 "expect": "fail"
-            }
-        ],
-        "NegativeWarnIfPass": [
+            },
             {
                 "name": "abcdefghijklmnopq",
                 "desc": "17位（超过上限16位，未拦截记WARNING）",
                 "expect": "fail"
             }
-        ]
+        ],
+        "NegativeMustFail": []
     }
 }

@@ -7,6 +7,10 @@ Update:
 2026/05/08: 新增，BMC KVM 功能测试，验证 KVM 服务配置查询、Session 参数设置及生效
 2026/05/08: 改善 - 新增 MaximumNumberOfSessions ≥ 2 校验（业务要求支持 2 个及以上 KVM 会话）
 2026/10/16: SDK 1.3.0 适配 - 改用 get_kvm_service() 类型化接口，URI 由 SDK 自动发现（issue/8）
+2026/11/16: 修复 KvmService 字段读取恒为 None 的 BUG —— KvmService 是 Pydantic 模型，
+  PascalCase 仅是解析输入的 alias，实例属性为 snake_case；原用
+  getattr(kvm_data, "SessionTimeoutMinutes") 等读已声明字段恒返回 None。
+  改为 snake_case 属性访问。另：Session 超时上限为 30min，测试值同步改为 30。
 """
 
 import os
@@ -21,7 +25,7 @@ from func.bmc_test_base import BmcTestBase
 
 from redfish_sdk import RedfishClient, RedfishException
 
-TEST_SESSION_TIMEOUT = 60   # 测试用 Session 超时时间（分钟）
+TEST_SESSION_TIMEOUT = 30   # 测试用 Session 超时时间（分钟，BMC 配置上限 30min）
 
 class Managers012KvmTest(BmcTestBase):
     """BMC KVM 功能测试
@@ -55,13 +59,14 @@ class Managers012KvmTest(BmcTestBase):
             )
 
             # 1. 查询 KVM 服务配置（SDK 1.3.0 类型化接口，URI 由 SDK 自动发现）
+            # KvmService 为 Pydantic 模型：须用 snake_case 属性访问（PascalCase 仅为 alias）
             kvm_data = self.client.get_kvm_service()
             kvm_url = kvm_data.kvm_url or ""
             max_sessions = kvm_data.maximum_number_of_sessions
-            active_sessions = getattr(kvm_data, "NumberOfActivatedSessions", None)
-            session_timeout = getattr(kvm_data, "SessionTimeoutMinutes", None)
-            encryption_enabled = getattr(kvm_data, "EncryptionEnabled", None)
-            activated_type = getattr(kvm_data, "ActivatedSessionsType", "") or ""
+            active_sessions = kvm_data.number_of_activated_sessions
+            session_timeout = kvm_data.session_timeout_minutes
+            encryption_enabled = kvm_data.encryption_enabled
+            activated_type = kvm_data.activated_sessions_type or ""
 
             test.print_log("INFO", f"KVM 配置: KvmUrl={kvm_url}, MaxSessions={max_sessions}, "
                            f"ActiveSessions={active_sessions}, Timeout={session_timeout}min, "
@@ -97,7 +102,7 @@ class Managers012KvmTest(BmcTestBase):
                 self.client.patch(kvm_data.odata_id, {"SessionTimeoutMinutes": TEST_SESSION_TIMEOUT})
                 time.sleep(2)
                 kvm_data = self.client.get_kvm_service()
-                new_timeout = getattr(kvm_data, "SessionTimeoutMinutes", None)
+                new_timeout = kvm_data.session_timeout_minutes
                 test.print_log("INFO", f"验证 SessionTimeoutMinutes={new_timeout}")
                 checks.append(("SessionTimeoutMinutes 设置验证", new_timeout == TEST_SESSION_TIMEOUT))
                 kvm_info["after_patch"] = {"SessionTimeoutMinutes": new_timeout}
@@ -111,7 +116,7 @@ class Managers012KvmTest(BmcTestBase):
                 self.client.patch(kvm_data.odata_id, {"SessionTimeoutMinutes": original_timeout})
                 time.sleep(1)
                 kvm_data = self.client.get_kvm_service()
-                restored = getattr(kvm_data, "SessionTimeoutMinutes", None)
+                restored = kvm_data.session_timeout_minutes
                 checks.append(("SessionTimeoutMinutes 恢复验证", restored == original_timeout))
                 kvm_info["after_restore"] = {"SessionTimeoutMinutes": restored}
             except RedfishException as e:

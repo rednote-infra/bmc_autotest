@@ -6,7 +6,7 @@
         "BMC_IP": "",
         "UserName": "",
         "PassWord": "",
-        "LedStates": ["Lit", "Blinking", "Off"],
+        "LedStates": ["Lit", "Off"],
         "ReadBackDelaySeconds": 2,
         "MaxRetry": 5
     }

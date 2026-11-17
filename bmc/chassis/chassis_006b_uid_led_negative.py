@@ -131,7 +131,7 @@ class ChassisUIDLEDNegativeCheck(BmcTestBase):
             if step["result"] == "FAIL":
                 overall = "FAIL"
 
-        # 确保测试结束后指示灯为 Off（防止前置正向用例遗留 Lit/Blinking）
+        # 确保测试结束后指示灯为 Off（防止前置正向用例遗留 Lit）
         try:
             self.client.patch(chassis_odata_id, {"IndicatorLED": "Off"})
             CommonFunction.print_log("INFO", "测试结束，已将 IndicatorLED 重置为 Off")

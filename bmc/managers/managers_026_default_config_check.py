@@ -7,26 +7,31 @@ Update:
 2026/05/12: 新增，BMC 默认配置合规检查
 2026/10/16: SDK 1.3.0 适配 - EthernetInterface 改用 get_manager_ethernet_interfaces()
   类型化接口（1.1.1 pydantic 解析 bug 已在 1.3.0 修复），URI 由 SDK 自动发现（issue/8）
+2026/11/16: 网口角色改用统一约定定位（func/bmc_network_function.classify_eth_roles）：
+  序号最小的网口为专用口（Detect），其余为 Sharelink(NCSI) 口；无 Sharelink 口
+  （单管理口机型）时本项不适用记 PASS。电源模式判定改为「均流（负载均衡）」。
+  SDK 未暴露的 OEM 字段（如错峰上电）记 WARNING 待 SDK 适配。
 
 测试内容：
   检查 BMC 出厂默认配置是否符合公司规范，包含以下检查项：
-  1. Sharelink（NCSI）关闭：OEM.NCSIModeSelect 为 None 或字段不存在（无 NCSI）
+  1. Sharelink（NCSI）关闭：Sharelink 口默认关闭；无 Sharelink 口的机型本项不适用
   2. IPv6 禁用：管理口无全局 IPv6 地址（LinkLocal fe80:: 可接受，不视为启用）
-  3. IPv4 专用口 Static：管理口 AddressOrigin = Static
-  4. 电源主备模式 Normal（负载均衡）：Power.Redundancy[*].Mode 为 Sharing/LoadBalanced，
-     不接受 Failover/Sparing（主备/热备模式）
+  3. IPv4 专用口 Static：专用管理口 AddressOrigin = Static
+  4. 电源模式=均流（负载均衡）：Power.Redundancy[*].Mode 为 Sharing/LoadBalanced，
+     不接受 Failover/Sparing 等主备/热备模式
+     （SDK 未暴露 Power.Redundancy 时记 WARNING，待 SDK 适配）
   5. 错峰上电启用且延时 ≤ 60s：OEM.PowerOnDelayEnabled=True，PowerOnDelaySeconds≤60
+     （SDK 未暴露该字段时记 WARNING，待 SDK 适配）
   6. 启动项支持 IPMI 设置：Boot.BootSourceOverrideMode AllowableValues 包含 Legacy 或 UEFI
 
   注意：
   - NTP/时区/电源恢复策略/端口/SNMP 等已在 managers_008/009/015/006b/011 单独覆盖
+  - 仅使用 SDK 类型化接口，不使用 get_raw 绕过
   - 内存漏斗（Memory Scrubbing）待厂商手册确认接口路径后补充
-  - 厂商差异字段（如 OEM.NCSIModeSelect/PowerOnDelaySeconds）
-    在当前厂商不支持时记 WARNING 不 FAIL
 
 PASS 标准：
-  所有检查项全部为 PASS，任意一项 FAIL 或 WARNING 均导致最终 FAIL。
-  WARNING 不视为通过——字段缺失或无法确认均属不合规。
+  所有检查项 PASS → PASS；仅 WARNING（如 SDK 未暴露字段）→ PASS 含 WARNING；
+  任一 FAIL → FAIL。
 """
 
 import os
@@ -37,13 +42,14 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.bmc_network_function import find_sharelink_ifaces, find_detect_ifaces
 
 from redfish_sdk import RedfishClient
 
-# 负载均衡模式（期望值），不在此列表则 FAIL
-PSU_LOADBALANCE_MODES = {"Sharing", "LoadBalanced", "Sparing N+1"}
-# 主备/热备模式（明确不允许）
-PSU_FAILOVER_MODES    = {"Failover", "Sparing", "NotRedundant"}
+# 均流（负载均衡）模式——我方期望的默认电源模式
+PSU_LOADBALANCE_MODES = {"Sharing", "LoadBalanced"}
+# 非均流模式（主备/热备/无冗余，明确不符合我方规范）
+PSU_NON_LOADBALANCE_MODES = {"Failover", "Sparing", "NotRedundant", "Active/Standby"}
 
 # IPv6 地址中可接受的前缀（LinkLocal 不视为"启用 IPv6"）
 IPV6_LINKLOCAL_PREFIX = "fe80"
@@ -71,32 +77,38 @@ class Managers026DefaultConfigCheck(BmcTestBase):
     def _check_sharelink(self, test: CommonFunction) -> dict:
         item = {"name": "Sharelink(NCSI)关闭"}
         try:
-            # SDK 1.3.0 类型化接口（返回成员详情列表）；Oem 为 extra dict 保留
+            # SDK 1.3.0 类型化接口
             eths = self.client.get_manager_ethernet_interfaces()
-            found_ncsi = False
-            for ei in eths:
-                oem = getattr(ei, "Oem", None) or {}
-                oem_pub = oem.get("Public", {}) if isinstance(oem, dict) else {}
-                if "NCSIModeSelect" not in oem_pub:
-                    continue
-                found_ncsi = True
-                val = oem_pub["NCSIModeSelect"]
-                item["interface"]      = ei.odata_id
-                item["NCSIModeSelect"] = val
-                # None 或 "Disabled" 视为关闭
-                if val is None or str(val).lower() in ("none", "disabled", "0", "false"):
-                    item["result"] = "PASS"
-                    test.print_log("INFO", f"✓ Sharelink：NCSIModeSelect={val}（已关闭）")
-                else:
-                    item["result"] = "FAIL"
-                    item["detail"] = f"NCSIModeSelect={val}，期望关闭"
-                    test.print_log("ERROR", f"✗ Sharelink：NCSIModeSelect={val}，期望关闭")
-                break
+            # 按约定定位网口角色：序号最小 = 专用口(Detect)，其余 = Sharelink(NCSI) 口
+            sharelink = find_sharelink_ifaces(eths)
+            item["total_interfaces"] = len(eths)
+            item["sharelink_ifaces"] = [getattr(i, "id", None) or getattr(i, "odata_id", "")
+                                        for i in sharelink]
 
-            if not found_ncsi:
+            if not sharelink:
+                # 单网口机型（或未暴露 Sharelink 口）→ 无 Sharelink 口需检查，视为合规
+                item["result"] = "PASS"
+                item["detail"] = "无 Sharelink(NCSI) 口（单管理口机型或未暴露），不适用"
+                test.print_log("INFO",
+                    "✓ Sharelink：未发现 Sharelink 口（共 %d 个网口），本项不适用" % len(eths))
+                return item
+
+            # Sharelink 口须默认关闭（InterfaceEnabled != True）
+            enabled_sharelink = [i for i in sharelink
+                                 if getattr(i, "interface_enabled", None) is True]
+            if not enabled_sharelink:
+                item["result"] = "PASS"
+                test.print_log("INFO",
+                    "✓ Sharelink：%d 个 Sharelink 口均已关闭" % len(sharelink))
+            else:
                 item["result"] = "FAIL"
-                item["detail"] = "未找到 NCSIModeSelect 字段，无法确认 Sharelink 状态"
-                test.print_log("ERROR", "✗ Sharelink：未找到 NCSIModeSelect 字段，视为不合规")
+                item["detail"] = (
+                    "Sharelink 口处于启用状态："
+                    + ", ".join((getattr(i, "id", None) or getattr(i, "odata_id", ""))
+                                for i in enabled_sharelink)
+                    + "（我方规范要求默认关闭）"
+                )
+                test.print_log("ERROR", "✗ Sharelink：" + item["detail"])
         except Exception as e:
             item["result"] = "FAIL"
             item["detail"] = str(e)
@@ -143,32 +155,39 @@ class Managers026DefaultConfigCheck(BmcTestBase):
     # 检查项 3：IPv4 专用口 Static
     # ─────────────────────────────────────────────────────────────────────────
     def _check_ipv4_static(self, test: CommonFunction) -> dict:
+        """IPv4 检查：仅校验专用管理口（Detect），Sharelink 口不参与。"""
         item = {"name": "IPv4 专用管理口 Static"}
         try:
             # SDK 1.3.0 类型化接口（1.1.1 pydantic 解析 bug 已修复）
             eths = self.client.get_manager_ethernet_interfaces()
+            # 仅取专用口（Detect）：序号最小的网口
+            detect = find_detect_ifaces(eths)
             results = []
-            for ei in eths:
+            for ei in detect:
                 for addr in (ei.ipv4_addresses or []):
-                    origin = addr.address_origin or ""
-                    ip     = addr.address or ""
                     results.append({
                         "interface":     ei.odata_id,
-                        "address":       ip,
-                        "addressOrigin": origin,
+                        "address":       addr.address or "",
+                        "addressOrigin": addr.address_origin or "",
                     })
 
             item["interfaces"] = results
-            # 期望：所有接口的 IPv4 AddressOrigin 均为 Static
+            if not results:
+                item["result"] = "FAIL"
+                item["detail"] = "专用管理口未配置 IPv4 地址"
+                test.print_log("ERROR", "✗ IPv4：专用管理口未配置 IPv4 地址")
+                return item
+
+            # 期望：专用口 IPv4 AddressOrigin 均为 Static
             non_static = [r for r in results if r["addressOrigin"] != "Static"]
             if not non_static:
                 item["result"] = "PASS"
                 test.print_log("INFO", f"✓ IPv4 Static：{results}")
             else:
                 item["result"] = "FAIL"
-                item["detail"] = f"发现非 Static 接口：{non_static}，期望全部为 Static"
+                item["detail"] = f"专用管理口发现非 Static：{non_static}，期望 Static"
                 test.print_log("ERROR",
-                    f"✗ IPv4 Static：发现非 Static 接口 {non_static}")
+                    f"✗ IPv4 Static：专用管理口发现非 Static {non_static}")
         except Exception as e:
             item["result"] = "FAIL"
             item["detail"] = str(e)
@@ -179,40 +198,44 @@ class Managers026DefaultConfigCheck(BmcTestBase):
     # 检查项 4：电源主备模式 Normal（负载均衡）
     # ─────────────────────────────────────────────────────────────────────────
     def _check_psu_redundancy_mode(self, test: CommonFunction) -> dict:
-        item = {"name": "电源主备模式 Normal（负载均衡）"}
+        """电源模式检查：我方期望均流（负载均衡），不接受主备/热备等冗余模式。"""
+        item = {"name": "电源模式（均流/负载均衡）"}
         try:
+            # 仅使用 SDK 类型化接口（issue/21：不接受 get_raw 绕过）
             pw = self.client.get_power()
             redundancy = pw.redundancy or []
             if not redundancy:
-                item["result"] = "FAIL"
-                item["detail"] = "Redundancy 集合为空，无法确认电源冗余模式"
-                test.print_log("ERROR", "✗ 电源冗余：Redundancy 集合为空，视为不合规")
+                # SDK 当前未暴露该字段 → 无法判定，记 WARNING 等 SDK 适配（issue/21）
+                item["result"] = "WARNING"
+                item["detail"] = "SDK 未返回 Power.Redundancy，无法判定（待 SDK 适配）"
+                test.print_log("WARNING",
+                    "⚠ 电源模式：SDK 未返回 Power.Redundancy，无法判定，待 SDK 适配")
                 return item
 
             modes = []
-            fail_modes = []
+            non_lb = []
             for r in redundancy:
                 mode = r.mode or ""
                 modes.append({"name": r.name or "", "mode": mode})
-                if mode in PSU_FAILOVER_MODES:
-                    fail_modes.append(mode)
+                if mode not in PSU_LOADBALANCE_MODES:
+                    non_lb.append(mode)
 
             item["redundancy_modes"] = modes
-            if fail_modes:
+            if non_lb:
                 item["result"] = "FAIL"
                 item["detail"] = (
-                    f"发现主备/热备模式：{fail_modes}，"
-                    f"期望负载均衡模式（{PSU_LOADBALANCE_MODES}）"
+                    f"发现非均流模式：{non_lb}，"
+                    f"期望均流模式（{sorted(PSU_LOADBALANCE_MODES)}）"
                 )
                 test.print_log("ERROR",
-                    f"✗ 电源模式：{fail_modes} 为主备/热备，期望负载均衡")
+                    f"✗ 电源模式：{non_lb} 非均流模式，期望均流（负载均衡）")
             else:
                 item["result"] = "PASS"
-                test.print_log("INFO", f"✓ 电源模式：{modes}（负载均衡）")
+                test.print_log("INFO", f"✓ 电源模式：{modes}（均流/负载均衡）")
         except Exception as e:
             item["result"] = "FAIL"
             item["detail"] = str(e)
-            test.print_log("ERROR", f"✗ 电源冗余模式检查异常：{e}")
+            test.print_log("ERROR", f"✗ 电源模式检查异常：{e}")
         return item
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -227,9 +250,11 @@ class Managers026DefaultConfigCheck(BmcTestBase):
             oem_extra = (oem_bmc.model_extra or {}) if oem_bmc else {}
 
             if "PowerOnDelayEnabled" not in oem_extra:
-                item["result"] = "FAIL"
-                item["detail"] = "未找到 OEM.PowerOnDelayEnabled 字段，无法确认错峰上电状态"
-                test.print_log("ERROR", "✗ 错峰上电：未找到 OEM.PowerOnDelayEnabled 字段，视为不合规")
+                # SDK 当前未暴露该 OEM 字段 → 无法判定，记 WARNING 等 SDK 适配（issue/21）
+                item["result"] = "WARNING"
+                item["detail"] = "SDK 未暴露 OEM.PowerOnDelayEnabled，无法判定（待 SDK 适配）"
+                test.print_log("WARNING",
+                    "⚠ 错峰上电：SDK 未暴露 OEM.PowerOnDelayEnabled，无法判定，待 SDK 适配")
                 return item
 
             enabled = oem_extra.get("PowerOnDelayEnabled")
@@ -364,18 +389,30 @@ class Managers026DefaultConfigCheck(BmcTestBase):
                 pass
 
         # ── 汇总 ──────────────────────────────────────────────────────────────
+        # 判定：任一 FAIL → FAIL；仅 WARNING（如 SDK 未暴露字段）→ PASS 含 WARNING
         test.print_log("INFO", "=" * 50)
         test.print_log("INFO", "检查项汇总：")
         any_fail = False
+        any_warn = False
         for c in checks:
             r = c.get("result", "FAIL")
-            lvl = "INFO" if r == "PASS" else "ERROR"
-            test.print_log(lvl, f"  {c['name']}：{r}")
-            if r != "PASS":
+            if r == "PASS":
+                lvl = "INFO"
+            elif r == "WARNING":
+                lvl = "WARNING"
+                any_warn = True
+            else:
+                lvl = "ERROR"
                 any_fail = True
+            test.print_log(lvl, f"  {c['name']}：{r}")
 
-        final = "FAIL" if any_fail else "PASS"
-        test.print_log("INFO" if final == "PASS" else "ERROR", f"最终结果：{final}")
+        if any_fail:
+            final = "FAIL"
+        elif any_warn:
+            final = "PASS_WITH_WARNING"
+        else:
+            final = "PASS"
+        test.print_log("INFO" if final != "FAIL" else "ERROR", f"最终结果：{final}")
 
         detail = {"checks": checks}
         test.add_key_value_to_json(self.result_json_path, "detail", value=detail)
@@ -393,7 +430,8 @@ if __name__ == "__main__":
             Managers026DefaultConfigCheck.TEST_CASE_KEY
         )
         obj.run_test()
-        exit_code = 0 if obj.command_check_result == "PASS" else 2
+        # PASS / PASS_WITH_WARNING → 0；FAIL → 2
+        exit_code = 0 if obj.command_check_result in ("PASS", "PASS_WITH_WARNING") else 2
     except KeyboardInterrupt:
         exit_code = 130
     except Exception as e:

@@ -6,16 +6,17 @@ Usage: python3 bmc/chassis_006a_uid_led_positive.py -i <bmc_ip> -u <username> -p
 Update:
 2026/04/22: 新增
 2026/06/23: 改写为 redfish_sdk v1.1.0 类型化接口（set_indicator_led / get_chassis().indicator_led）
+2026/11/17: 移除 Blinking 态测试 —— 运维已确认不会使用主动 Blinking，无需推动厂商适配
 
 数据来源：get_chassis().indicator_led（读，v1.1.0 新增字段）
           set_indicator_led("<value>")（写，v1.1.0，内部 PATCH /redfish/v1/Chassis/1）
 
 校验策略（正向测试）：
-  依次将 UID 指示灯切换为 Lit / Blinking / Off 三态，
+  依次将 UID 指示灯切换为 Lit / Off 两态，
   每次 PATCH 后 GET 回读验证实际值与期望值一致。
   测试结束后回滚到 Off（最后一步本身即为 Off，无需额外回滚）。
 
-  PASS 条件：三态切换全部成功，回读值与期望值一致
+  PASS 条件：两态切换全部成功，回读值与期望值一致
   FAIL 条件：任意一态切换失败，或回读值与期望值不符
 """
 
@@ -31,14 +32,14 @@ from func.bmc_test_base import BmcTestBase
 
 from redfish_sdk import RedfishClient, RedfishException  # noqa: F401
 
-# UID 指示灯标准合法值（正向测试依次切换）
-LED_STATES = ["Lit", "Blinking", "Off"]  # 由配置 LedStates 覆盖
+# UID 指示灯正向测试依次切换的值（不含 Blinking：运维已确认不使用主动闪烁）
+LED_STATES = ["Lit", "Off"]  # 由配置 LedStates 覆盖
 
 class ChassisUIDLEDPositiveCheck(BmcTestBase):
     """Chassis UID 指示灯操作测试（正向）
 
     用例编号：Redfish_Chassis_006a
-    检查项：依次将 UID 指示灯切换为 Lit / Blinking / Off，验证每态回读值一致
+    检查项：依次将 UID 指示灯切换为 Lit / Off，验证每态回读值一致
     """
 
     def __init__(self, case: str):

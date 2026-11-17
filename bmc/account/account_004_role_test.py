@@ -5,12 +5,15 @@ Date: 2026/04/23
 Usage: python3 bmc/account_004_role_test.py -i <bmc_ip> -u <username> -p <password>
 Update:
 2026/04/23: 新增
+2026/11/16: 修正 Noaccess 类角色的误判 —— "无访问权限"角色按设计 AssignedPrivileges
+            即为空集合（空集是其正确语义，非缺陷），排除在权限非空校验之外。
 
 校验策略：
   1. get_roles 获取角色列表
   2. 验证列表非空
   3. 验证每个角色存在 assigned_privileges 且非空
-  4. 验证标准角色（Administrator/Operator/User）均存在
+     （Noaccess 等"无权限"角色除外：空集为其正确语义）
+  4. 验证标准角色（Administrator/Operator/只读角色等价名）均存在
   PASS：角色列表完整，标准角色全部存在，权限字段非空
   FAIL：列表为空、标准角色缺失或权限字段缺失
 """
@@ -28,12 +31,18 @@ from func.bmc_test_base import BmcTestBase
 from redfish_sdk import RedfishClient, RedfishException
 
 # DMTF DSP0266 标准 RoleId 枚举（issue/19）：
-#   Administrator / Operator / ReadOnlyUser（及常见别名 ReadOnly）/ None
-# "User" 不是标准 RoleId（IPMI 传统 USER 权限级在部分厂商映射时遗留的非标准名）
+#   Administrator / Operator / ReadOnly（标准三件套）
+# 非标准名（厂商私有）：ReadOnlyUser / User / Commonuser 等
 STANDARD_ROLES = {"Administrator", "Operator", "ReadOnly", "ReadOnlyUser"}
 
-# 只读角色的等价名集合：任一存在即视为"只读角色"覆盖（兼容宽松实现的厂商）
-READONLY_EQUIV = {"ReadOnly", "ReadOnlyUser", "User"}
+# 只读角色的等价名集合（大小写不敏感）：任一存在即视为"只读角色"覆盖。
+# 覆盖：标准名 ReadOnly、宽松实现的 ReadOnlyUser/User，以及厂商私有的 Commonuser。
+# 注：Commonuser 非 DMTF 标准名，此处仅作兼容兜底，不改变"标准名缺失"的合规判定。
+READONLY_EQUIV = {"readonly", "readonlyuser", "user", "commonuser"}
+
+# "无访问权限"角色名（大小写不敏感匹配）：其 AssignedPrivileges 正确的取值即为空集合，
+# 不可用"权限非空"去校验，否则必然误判 FAIL
+NO_PRIVILEGE_ROLES = {"noaccess", "noacess", "noaccessrole"}
 
 class AccountRoleTest(BmcTestBase):
     """Account 角色定义测试
@@ -77,6 +86,13 @@ class AccountRoleTest(BmcTestBase):
                         f"  角色：id={r.id}, is_predefined={r.is_predefined}, "
                         f"assigned_privileges={r.assigned_privileges}")
                     role_ids.add(r.id)
+
+                    # "无访问权限"角色（如 Noaccess）：空权限集合是其正确语义，跳过非空校验
+                    if (r.id or "").lower() in NO_PRIVILEGE_ROLES:
+                        CommonFunction.print_log("INFO",
+                            f"  角色 {r.id} 为无权限角色，AssignedPrivileges 允许为空，跳过非空校验")
+                        continue
+
                     if not r.assigned_privileges:
                         CommonFunction.print_log("ERROR", f"  角色 {r.id} 的 assigned_privileges 为空")
                         result = "FAIL"
@@ -94,13 +110,21 @@ class AccountRoleTest(BmcTestBase):
                 else:
                     CommonFunction.print_log("INFO", f"  ✓ Administrator/Operator 存在")
 
-                readonly_found = READONLY_EQUIV & role_ids
+                # 只读角色等价名匹配（大小写不敏感）
+                role_ids_lower = {(rid or "").lower(): rid for rid in role_ids}
+                readonly_found = [role_ids_lower[k] for k in READONLY_EQUIV
+                                  if k in role_ids_lower]
                 if readonly_found:
                     CommonFunction.print_log("INFO",
-                        f"  ✓ 只读角色存在：{sorted(readonly_found)}")
+                        f"  ✓ 只读角色存在：{readonly_found}")
+                    # 标准名 ReadOnly 缺失、仅靠厂商私有名兜底时显式提示（不判 FAIL）
+                    if "readonly" not in role_ids_lower:
+                        CommonFunction.print_log("WARNING",
+                            f"  未使用 DMTF 标准名 'ReadOnly'，"
+                            f"以厂商等价角色 {readonly_found} 覆盖（记 WARNING）")
                 else:
                     CommonFunction.print_log("WARNING",
-                        f"  未发现只读角色（{sorted(READONLY_EQUIV)} 均不存在），"
+                        f"  未发现只读角色（{sorted(READONLY_EQUIV)} 均不存在，大小写不敏感），"
                         f"宽松实现的厂商可能使用其他命名，记 WARNING 不 FAIL")
 
         except RedfishException as e:
