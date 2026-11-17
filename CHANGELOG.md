@@ -10,6 +10,70 @@
 
 ## [Unreleased]
 
+## [1.3.2] — 2026-11-17
+
+热修：修复真机验证发现的脚本崩溃、字段读取失效与判定标准偏差（issue/48，PR #49）。
+共 15 个文件（+642/-342），新增 1 个公共模块。
+
+### Fixed — 脚本崩溃
+
+- `managers_023_sol_log_test`：`self.sol_log_path` 从未定义，SOL 采集成功后
+  `open()` 抛 `AttributeError` 崩溃；崩溃致 `deactivate` 未执行（SOL 连接残留）、
+  结果未落盘、退出码为 ERROR。补定义日志路径（`LOG_DIR/sol_capture.log`）；
+  SOL 配置不可用时跳过连接与采集；采集全程 `try/finally` 保证进程回收与连接释放。
+
+### Fixed — 字段读取恒为 None
+
+- `managers_012_kvm_test`：`KvmService` 为 Pydantic 模型，PascalCase 仅为解析 alias，
+  实例属性为 snake_case，故 `getattr(model, "PascalCase")` 读**已声明字段**恒返回 None
+  （已声明字段不落入 `model_extra`）。连带 `original_timeout=None` 会在恢复时回写
+  `None`，可能损坏 BMC 配置。改用 snake_case 属性访问；
+  `TEST_SESSION_TIMEOUT` 60 → 30（原值超出 BMC 上限）。
+
+### Fixed — 误判 FAIL（判定标准修正）
+
+- `chassis_009_sensors_check`：未安装硬件的空槽位（`Status.State == "Absent"`，
+  如空 NIC/NVMe/GPU 槽位）被划为"必要传感器"，空读值触发 ERROR → 大量误报 FAIL。
+  改为空槽位按"未安装"跳过，不计入 PASS/FAIL；传感器组引入 **severity 分级**，
+  硬盘温度、PCIe 卡温度异常降级 WARNING（CPU/内存/风扇/PSU/功耗仍为 ERROR）；
+  PCIe 卡温度关键字去 `riser`、加 `slot`。
+- `managers_026_default_config_check`：
+  Sharelink 检查原依赖厂商 OEM 字段（无 NCSI 机型误报 FAIL）→ 改写为按网口角色判定；
+  电源模式期望改为**均流**（非主备/热备），SDK 取不到 `Power.Redundancy` 时记 WARNING；
+  错峰上电字段 SDK 未暴露时记 WARNING（待 SDK 适配）；IPv4 检查由"全部接口"改为
+  **仅校验专用管理口**（避免内部口误判）。
+- `managers_003_ethernet_interfaces_check`：原依赖厂商 OEM 扩展字段
+  `Oem.Public.NCSIModeSelect` 判断网口角色，非所有厂商都提供该字段，导致 Sharelink 口
+  被误判为专用口。改用统一约定定位（序号最小 = 专用口，其余 = Sharelink 口）。
+- `account_004_role_test`：`Noaccess` 等"无访问权限"角色按设计 `AssignedPrivileges`
+  即为空集合（空集为正确语义），被"权限非空"统一校验必然误判 FAIL。
+  排除无权限角色出非空校验；只读角色等价名补充并改为大小写不敏感匹配，
+  靠非标准名兜底时记 WARNING 提示，不掩盖标准名缺失。
+- `ipmi_008_user_name_rule`：3 位用户名被列入"必须拦截"（未拦截 → FAIL），
+  与 account_007 约定的"长度越界属宽松项，未拦截记 WARNING"冲突。
+  移入宽松组，分类规范与 account_007 对齐。
+
+### Fixed — 检查静默失效
+
+- `protocol_001_dmtf_compliance`：403 权限检查所用测试账号的用户名不符合用户名规范，
+  BMC 拒绝创建 → 该检查**长期从未真正执行**（降级 WARNING 掩盖）；且创建账号时
+  未传 `Enabled`，BMC 默认禁用 → 登录返回 401（非预期的 403）。
+  修复：测试账号用户名规范化、凭据收敛至 conf `TestAccount` 段、创建时显式 `Enabled=True`。
+  另：空 JSON PATCH 判定由"必须 200/204"放宽为 **2xx/4xx 均可**
+  （DSP0266 §9.6 用词为 `may accept`，服务拒绝属合法实现选择）。
+
+### Changed — 能力调整
+
+- `chassis_006a_uid_led_positive` / `chassis_006b_uid_led_negative`：移除 Blinking 态测试
+  （运维确认不使用主动闪烁，无需推动厂商适配）；UID 指示灯测试由三态改为两态
+  （Lit / Off）。
+
+### Added
+
+- `func/bmc_network_function.py`：管理网口角色判定公共函数
+  （`classify_eth_roles` / `find_detect_ifaces` / `find_sharelink_ifaces`），
+  供 `managers_003` / `managers_026` 共用，避免脚本层级互相引用。
+
 ## [1.3.1] — 2026-10-28
 
 非标准 RoleId 'User' 修正 + SDK 1.3.0 接口覆盖扩展（issue/19，PR #20）。
