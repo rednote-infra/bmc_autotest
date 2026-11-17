@@ -61,30 +61,43 @@ class Managers017VncCheck(BmcTestBase):
             test.print_log("INFO", "VncService 接口查询成功")
             checks.append(("VncService 接口查询成功", True))
 
-            # 2. SessionMode 存在且在 ["Share", "Private"] 中（OEM 扩展字段，经 extra 保留可属性访问）
-            session_mode = getattr(vnc_data, "SessionMode", None)
-            session_mode_ok = session_mode in VALID_SESSION_MODES
-            test.print_log("INFO",
-                f"SessionMode: {'✓' if session_mode_ok else '✗'} {session_mode!r} "
-                f"（期望：{VALID_SESSION_MODES}）")
+            # 2. 取字段：SDK 已将 OEM 字段类型化（蛇形名），同时保留 PascalCase 兑底
+            def _pick(obj, snake, pascal):
+                val = getattr(obj, snake, None)
+                if val is None:
+                    val = getattr(obj, pascal, None)
+                return val
+
+            # 2. SessionMode 存在且在 ["Share", "Private"] 中
+            #    SessionMode 在部分机型上为 null（表示共享/私有会话模式能力未启用），
+            #    属于合法的可选能力缺失，计为 SKIP（checks 里存 None）不计入 FAIL。
+            session_mode = _pick(vnc_data, "session_mode", "SessionMode")
+            if session_mode is None:
+                session_mode_ok = None
+                test.print_log("INFO", "SessionMode: - SKIP 字段为 null（本机型未启用会话模式选择）")
+            else:
+                session_mode_ok = session_mode in VALID_SESSION_MODES
+                test.print_log("INFO",
+                    f"SessionMode: {'✓' if session_mode_ok else '✗'} {session_mode!r} "
+                    f"（期望：{VALID_SESSION_MODES}）")
             checks.append(("SessionMode 存在且在有效枚举中", session_mode_ok))
 
-            # 3. SessionTimeoutMinutes 存在且 >0（OEM 扩展字段）
-            session_timeout = getattr(vnc_data, "SessionTimeoutMinutes", None)
+            # 3. SessionTimeoutMinutes 存在且 >0
+            session_timeout = _pick(vnc_data, "session_timeout_minutes", "SessionTimeoutMinutes")
             timeout_ok = isinstance(session_timeout, (int, float)) and session_timeout > 0
             test.print_log("INFO",
                 f"SessionTimeoutMinutes: {'✓' if timeout_ok else '✗'} {session_timeout!r}")
             checks.append(("SessionTimeoutMinutes 存在且 >0", timeout_ok))
 
-            # 4. SSLEncryptionEnabled 存在且为 bool（OEM 扩展字段）
-            ssl_enabled = getattr(vnc_data, "SSLEncryptionEnabled", None)
+            # 4. SSLEncryptionEnabled 存在且为 bool
+            ssl_enabled = _pick(vnc_data, "ssl_encryption_enabled", "SSLEncryptionEnabled")
             ssl_ok = isinstance(ssl_enabled, bool)
             test.print_log("INFO",
                 f"SSLEncryptionEnabled: {'✓' if ssl_ok else '✗'} {ssl_enabled!r}")
             checks.append(("SSLEncryptionEnabled 存在且为 bool", ssl_ok))
 
-            # 5. MaximumNumberOfSessions 存在且 >=1（OEM 扩展字段）
-            max_sessions = getattr(vnc_data, "MaximumNumberOfSessions", None)
+            # 5. MaximumNumberOfSessions 存在且 >=1
+            max_sessions = _pick(vnc_data, "maximum_number_of_sessions", "MaximumNumberOfSessions")
             max_ok = isinstance(max_sessions, int) and max_sessions >= 1
             test.print_log("INFO",
                 f"MaximumNumberOfSessions: {'✓' if max_ok else '✗'} {max_sessions!r}")
@@ -96,7 +109,8 @@ class Managers017VncCheck(BmcTestBase):
             vnc_info["SSLEncryptionEnabled"] = ssl_enabled
             vnc_info["MaximumNumberOfSessions"] = max_sessions
 
-            final = "PASS" if all(r for _, r in checks) else "FAIL"
+            # checks 中值为 None 表示 SKIP，不参与 PASS/FAIL 判定
+            final = "PASS" if all(r for _, r in checks if r is not None) else "FAIL"
 
         except RedfishException as e:
             test.print_log("ERROR", f"Redfish SDK 调用失败：{str(e)}")
@@ -117,8 +131,9 @@ class Managers017VncCheck(BmcTestBase):
             test.add_key_value_to_json(self.result_json_path, "detail.cycle",
                                        value={"metrics": field_name, "value": field_val})
         for label, passed in checks:
+            mark = "PASS" if passed else ("SKIP" if passed is None else "FAIL")
             test.add_key_value_to_json(self.result_json_path, "detail.cycle",
-                                       value={"metrics": label, "value": "PASS" if passed else "FAIL"})
+                                       value={"metrics": label, "value": mark})
 
         self.command_check_result = final
         test.add_key_value_to_json(self.result_json_path, "summary",

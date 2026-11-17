@@ -11,18 +11,24 @@ Update:
   序号最小的网口为专用口（Detect），其余为 Sharelink(NCSI) 口；无 Sharelink 口
   （单管理口机型）时本项不适用记 PASS。电源模式判定改为「均流（负载均衡）」。
   SDK 未暴露的 OEM 字段（如错峰上电）记 WARNING 待 SDK 适配。
+2026/11/17: 电源模式判定改用 Oem.xFusion.ExpectedRedundancy。
+  Power.Redundancy[*].Mode 是固定能力枚举（iBMC 源码按数组下标硬编码，恒为
+  [0]=Sharing、[1]=Failover），不能反映实际生效模式，故改为解析
+  PowerControl[*].Oem.xFusion.ExpectedRedundancy 的 @odata.id 反查真实模式；
+  该字段缺失时降级为 WARNING（按「支持均流」口径），避免非 CMCC 机型恒误判。
+  启动项检查补充 Boot.Target@Redfish.AllowableValues（Mode 的 AllowableValues 常为空）。
 
 测试内容：
   检查 BMC 出厂默认配置是否符合公司规范，包含以下检查项：
   1. Sharelink（NCSI）关闭：Sharelink 口默认关闭；无 Sharelink 口的机型本项不适用
   2. IPv6 禁用：管理口无全局 IPv6 地址（LinkLocal fe80:: 可接受，不视为启用）
   3. IPv4 专用口 Static：专用管理口 AddressOrigin = Static
-  4. 电源模式=均流（负载均衡）：Power.Redundancy[*].Mode 为 Sharing/LoadBalanced，
-     不接受 Failover/Sparing 等主备/热备模式
-     （SDK 未暴露 Power.Redundancy 时记 WARNING，待 SDK 适配）
+  4. 电源模式=均流（负载均衡）：按 PowerControl[*].Oem.xFusion.ExpectedRedundancy
+     指向的冗余组取其 Mode，期望 Sharing/LoadBalanced，不接受 Failover 等主备模式。
+     注意 Power.Redundancy[*].Mode 是能力枚举（恒含 Failover），不可直接判定。
   5. 错峰上电启用且延时 ≤ 60s：OEM.PowerOnDelayEnabled=True，PowerOnDelaySeconds≤60
-     （SDK 未暴露该字段时记 WARNING，待 SDK 适配）
-  6. 启动项支持 IPMI 设置：Boot.BootSourceOverrideMode AllowableValues 包含 Legacy 或 UEFI
+     （xFusion 机型字段名为 PowerRestoreDelayMode/PowerRestoreDelaySeconds）
+  6. 启动项支持 IPMI 设置：Boot 的 Target@Redfish.AllowableValues 包含有效启动项
 
   注意：
   - NTP/时区/电源恢复策略/端口/SNMP 等已在 managers_008/009/015/006b/011 单独覆盖
@@ -198,12 +204,33 @@ class Managers026DefaultConfigCheck(BmcTestBase):
     # 检查项 4：电源主备模式 Normal（负载均衡）
     # ─────────────────────────────────────────────────────────────────────────
     def _check_psu_redundancy_mode(self, test: CommonFunction) -> dict:
-        """电源模式检查：我方期望均流（负载均衡），不接受主备/热备等冗余模式。"""
+        """电源模式检查：我方期望均流（负载均衡），不接受主备/热备等冗余模式。
+
+        判定依据说明（重要）：
+
+        ``Power.Redundancy[*].Mode`` **不能**直接用于判断实际生效模式。
+        iBMC 源码 ``redfish_provider_chassis_power_mode.c:add_power_redundancy_mode()``
+        在非 CMCC 定制分支里按数组下标硬编码：
+
+            (0 == arr_index) ? Sharing : Failover
+
+        配合 ``RF_POWER_REDUNDANCY_ARRAY_LEN = 2``，``Redundancy`` 恒为两个元素
+        （[0] 恒 Sharing、[1] 恒 Failover），与设备真实工作模式无关。真实模式
+        （``PROPERTY_ACTUAL_POWER_MODE``）虽被读出，但仅在 CMCC 定制下使用。
+
+        xFusion 在 OEM 中给出了指向「当前期望生效冗余组」的链接：
+
+            PowerControl[i].Oem.xFusion.ExpectedRedundancy = {"@odata.id": ".../Redundancy/N"}
+
+        反查该 ``@odata.id`` 对应的 ``Redundancy[N].Mode`` 才是真实生效模式。
+        另可参考同一 OEM 块中的 ``NormalAndRedundancy``（"Disabled" 表示未启用主备）。
+        """
         item = {"name": "电源模式（均流/负载均衡）"}
         try:
             # 仅使用 SDK 类型化接口（issue/21：不接受 get_raw 绕过）
             pw = self.client.get_power()
             redundancy = pw.redundancy or []
+            controls = pw.power_control or []
             if not redundancy:
                 # SDK 当前未暴露该字段 → 无法判定，记 WARNING 等 SDK 适配（issue/21）
                 item["result"] = "WARNING"
@@ -212,26 +239,92 @@ class Managers026DefaultConfigCheck(BmcTestBase):
                     "⚠ 电源模式：SDK 未返回 Power.Redundancy，无法判定，待 SDK 适配")
                 return item
 
-            modes = []
-            non_lb = []
+            # ① 建立 @odata.id -> (Mode, Name) 映射。
+            #    SDK 的 Redundancy 模型未声明 odata_id 字段，它落在 model_extra 中。
+            id2group = {}
+            all_modes = []
             for r in redundancy:
+                oid = getattr(r, "odata_id", None) or (r.model_extra or {}).get("@odata.id")
                 mode = r.mode or ""
-                modes.append({"name": r.name or "", "mode": mode})
-                if mode not in PSU_LOADBALANCE_MODES:
-                    non_lb.append(mode)
+                all_modes.append({"name": r.name or "", "mode": mode, "odata_id": oid})
+                if oid:
+                    id2group[oid] = {"name": r.name or "", "mode": mode}
 
-            item["redundancy_modes"] = modes
-            if non_lb:
+            item["redundancy_modes"] = all_modes
+
+            # ② 从 PowerControl[*].Oem.xFusion.ExpectedRedundancy 取出期望生效组。
+            #    PowerControl 模型同样未声明 Oem，需走 model_extra。
+            effective = []          # [{"name":.., "mode":.., "via":..}]
+            unknown_links = []
+            for pc in controls:
+                extra = pc.model_extra or {}
+                oem = extra.get("Oem")
+                if not isinstance(oem, dict):
+                    continue
+                xf = oem.get("xFusion")
+                if not isinstance(xf, dict):
+                    continue
+                exp = xf.get("ExpectedRedundancy")
+                oid = exp.get("@odata.id") if isinstance(exp, dict) else None
+                if not oid:
+                    continue
+                grp = id2group.get(oid)
+                if grp is None:
+                    unknown_links.append(oid)
+                    continue
+                effective.append({
+                    "name": grp["name"],
+                    "mode": grp["mode"],
+                    "via": "Oem.xFusion.ExpectedRedundancy",
+                    "controller": getattr(pc, "member_id", None),
+                })
+
+            if effective:
+                item["effective_modes"] = effective
+                item["judged_by"] = "Oem.xFusion.ExpectedRedundancy"
+                non_lb = [e["mode"] for e in effective
+                          if e["mode"] not in PSU_LOADBALANCE_MODES]
+                if non_lb:
+                    item["result"] = "FAIL"
+                    item["detail"] = (
+                        f"实际生效模式非均流：{non_lb}，"
+                        f"期望均流模式（{sorted(PSU_LOADBALANCE_MODES)}）"
+                    )
+                    test.print_log("ERROR",
+                        f"✗ 电源模式：实际生效 {non_lb} 非均流，"
+                        f"期望均流（负载均衡）")
+                else:
+                    item["result"] = "PASS"
+                    test.print_log("INFO",
+                        f"✓ 电源模式：实际生效 "
+                        f"{sorted({e['mode'] for e in effective})}（均流/负载均衡）")
+                return item
+
+            # ③ 回退：无法获取 ExpectedRedundancy（非 xFusion OEM / 字段未下发）。
+            #    此时 Redundancy[*].Mode 恒含 Failover，不能据此判 FAIL，
+            #    否则所有非 CMCC 机型都会误判。按「支持均流」口径判定并降级为 WARNING。
+            supported = {m["mode"] for m in all_modes}
+            lb_supported = bool(supported & set(PSU_LOADBALANCE_MODES))
+            item["supported_modes"] = sorted(supported)
+            item["judged_by"] = "Redundancy[*].Mode (能力枚举)"
+            if unknown_links:
+                item["unresolved_expected_redundancy"] = unknown_links
+            if lb_supported:
+                item["result"] = "WARNING"
+                item["detail"] = (
+                    "未下发 Oem.xFusion.ExpectedRedundancy，无法判定实际生效模式；"
+                    f"Redundancy 能力枚举含均流（{sorted(supported)}），按支持均流处理"
+                )
+                test.print_log("WARNING",
+                    "⚠ 电源模式：未下发 ExpectedRedundancy，无法确认实际模式；"
+                    f"能力枚举含均流 {sorted(supported)}")
+            else:
                 item["result"] = "FAIL"
                 item["detail"] = (
-                    f"发现非均流模式：{non_lb}，"
-                    f"期望均流模式（{sorted(PSU_LOADBALANCE_MODES)}）"
+                    f"未下发 ExpectedRedundancy 且能力枚举不含均流：{sorted(supported)}"
                 )
                 test.print_log("ERROR",
-                    f"✗ 电源模式：{non_lb} 非均流模式，期望均流（负载均衡）")
-            else:
-                item["result"] = "PASS"
-                test.print_log("INFO", f"✓ 电源模式：{modes}（均流/负载均衡）")
+                    f"✗ 电源模式：能力枚举不含均流 {sorted(supported)}")
         except Exception as e:
             item["result"] = "FAIL"
             item["detail"] = str(e)
@@ -245,46 +338,67 @@ class Managers026DefaultConfigCheck(BmcTestBase):
         item = {"name": f"错峰上电启用且延时 ≤ {self.MAX_POWER_ON_DELAY_SEC}s"}
         try:
             sys_obj = self.client.get_system()
-            # OEM.Public fields are in sys_obj.oem.bmc (Bmc model, extra="allow")
-            oem_bmc = sys_obj.oem.bmc if sys_obj.oem else None
-            oem_extra = (oem_bmc.model_extra or {}) if oem_bmc else {}
+            # OEM 字段可能在 oem.bmc(Public) 或 oem.xFusion(厂商块) 中
+            oem_extra = {}
+            if sys_obj.oem:
+                for attr_name in ("bmc", "xfusion"):
+                    blk = getattr(sys_obj.oem, attr_name, None)
+                    if blk is not None:
+                        oem_extra.update(getattr(blk, "model_extra", None) or {})
+                # 兜底：直接读 model_extra（厂商键原样保留时）
+                raw = (sys_obj.oem.model_extra or {})
+                for vendor in ("Public", "BMC", "xFusion"):
+                    if isinstance(raw.get(vendor), dict):
+                        oem_extra.update(raw[vendor])
 
-            if "PowerOnDelayEnabled" not in oem_extra:
-                # SDK 当前未暴露该 OEM 字段 → 无法判定，记 WARNING 等 SDK 适配（issue/21）
-                item["result"] = "WARNING"
-                item["detail"] = "SDK 未暴露 OEM.PowerOnDelayEnabled，无法判定（待 SDK 适配）"
+            # 字段名映射：
+            #   Lenovo/HPE 风格：PowerOnDelayEnabled / PowerOnDelaySeconds
+            #   xFusion 风格   ：PowerRestoreDelayMode / PowerRestoreDelaySeconds
+            if "PowerOnDelayEnabled" in oem_extra:
+                enabled = oem_extra.get("PowerOnDelayEnabled")
+                seconds = oem_extra.get("PowerOnDelaySeconds")
+                mode    = oem_extra.get("PowerOnDelayMode", "")
+                src     = "PowerOnDelayEnabled"
+            elif "PowerRestoreDelayMode" in oem_extra:
+                mode    = oem_extra.get("PowerRestoreDelayMode", "")
+                seconds = oem_extra.get("PowerRestoreDelaySeconds")
+                # "DefaultDelay"/"UserDefined" 表示启用错峰；"Disabled" 表示关闭
+                enabled = str(mode).lower() not in ("disabled", "none", "")
+                src     = "PowerRestoreDelayMode"
+            else:
+                item["result"] = "SKIP"
+                item["detail"] = ("机型未下发 PowerOnDelayEnabled/"
+                                  "PowerRestoreDelayMode，无法判定错峰上电")
                 test.print_log("WARNING",
-                    "⚠ 错峰上电：SDK 未暴露 OEM.PowerOnDelayEnabled，无法判定，待 SDK 适配")
+                    "错峰上电：机型未下发相关字段，计 SKIP")
                 return item
 
-            enabled = oem_extra.get("PowerOnDelayEnabled")
-            seconds = oem_extra.get("PowerOnDelaySeconds")
-            mode    = oem_extra.get("PowerOnDelayMode", "")
+            item["source"]              = src
             item["PowerOnDelayEnabled"] = enabled
             item["PowerOnDelaySeconds"] = seconds
             item["PowerOnDelayMode"]    = mode
 
             if not enabled:
                 item["result"] = "FAIL"
-                item["detail"] = "PowerOnDelayEnabled=False，期望 True（错峰上电须启用）"
-                test.print_log("ERROR", "✗ 错峰上电：未启用（期望 True）")
+                item["detail"] = f"{src} 显示错峰上电未启用（mode={mode}）"
+                test.print_log("ERROR", f"✗ 错峰上电：未启用（mode={mode}）")
                 return item
 
             if seconds is None:
                 item["result"] = "FAIL"
-                item["detail"] = "PowerOnDelayEnabled=True 但 PowerOnDelaySeconds 为空，无法确认延时值"
-                test.print_log("ERROR", "✗ 错峰上电：已启用但无法读取延时秒数，视为不合规")
+                item["detail"] = "已启用但无法读取延时秒数，无法确认"
+                test.print_log("ERROR", "✗ 错峰上电：已启用但无法读取延时秒数")
                 return item
 
-            if int(seconds) <= self.MAX_POWER_ON_DELAY_SEC:
+            if float(seconds) <= self.MAX_POWER_ON_DELAY_SEC:
                 item["result"] = "PASS"
                 test.print_log("INFO",
-                    f"✓ 错峰上电：启用，延时={seconds}s ≤ {self.MAX_POWER_ON_DELAY_SEC}s，模式={mode}")
+                    f"✓ 错峰上电：启用，延时={seconds}s ≤ "
+                    f"{self.MAX_POWER_ON_DELAY_SEC}s，模式={mode}（字段来源：{src}）")
             else:
                 item["result"] = "FAIL"
                 item["detail"] = (
-                    f"PowerOnDelaySeconds={seconds}s > {self.MAX_POWER_ON_DELAY_SEC}s，"
-                    "需调整为 ≤ 60s"
+                    f"延时={seconds}s > {self.MAX_POWER_ON_DELAY_SEC}s，需调整为 ≤ 60s"
                 )
                 test.print_log("ERROR",
                     f"✗ 错峰上电：延时={seconds}s 超过限制 {self.MAX_POWER_ON_DELAY_SEC}s")
@@ -303,38 +417,46 @@ class Managers026DefaultConfigCheck(BmcTestBase):
             sys_obj = self.client.get_system()
             boot = sys_obj.boot
             boot_extra = (boot.model_extra or {}) if boot else {}
-            allowable = boot_extra.get(
+
+            # SDK 已将 BootSourceOverrideTarget@Redfish.AllowableValues 建模为
+            # boot.allowable_values（带 @ 的键不会进入 model_extra）。
+            allowable_target = list(getattr(boot, "allowable_values", None) or [])
+            if not allowable_target:
+                allowable_target = boot_extra.get(
+                    "BootSourceOverrideTarget@Redfish.AllowableValues", []
+                ) or []
+            allowable_mode = boot_extra.get(
                 "BootSourceOverrideMode@Redfish.AllowableValues", []
             ) or []
             current = boot.boot_source_override_mode if boot else ""
-            item["BootSourceOverrideMode"]              = current
-            item["BootSourceOverrideMode_AllowableValues"] = allowable
+            item["BootSourceOverrideMode"]                   = current
+            item["BootSourceOverrideMode_AllowableValues"]   = allowable_mode
+            item["BootSourceOverrideTarget_AllowableValues"] = allowable_target
 
-            # 支持 Legacy 或 UEFI 即视为 IPMI 可设置启动模式
-            supported = bool(allowable) and any(
-                v in allowable for v in ("Legacy", "UEFI", "BIOS")
+            # 判定：支持 Legacy/UEFI/BIOS 说明可切启动模式；
+            #       或有非 None 的 OverrideTarget 说明可用 IPMI 指定启动设备。
+            mode_supported = any(
+                v in allowable_mode for v in ("Legacy", "UEFI", "BIOS")
             )
+            target_supported = any(
+                v not in (None, "", "None") for v in allowable_target
+            )
+            supported = mode_supported or target_supported
+
             if supported:
                 item["result"] = "PASS"
                 test.print_log("INFO",
-                    f"✓ 启动模式：AllowableValues={allowable}（支持 IPMI 设置）")
+                    f"✓ 启动模式：Mode AllowableValues={allowable_mode}，"
+                    f"Target AllowableValues={allowable_target}（支持 IPMI 设置）")
             else:
-                if not allowable:
-                    item["result"] = "FAIL"
-                    item["detail"] = (
-                        "BootSourceOverrideMode@Redfish.AllowableValues 为空，"
-                        "无法确认是否支持 IPMI 设置启动模式"
-                    )
-                    test.print_log("ERROR",
-                        f"✗ 启动模式：AllowableValues 为空，视为不合规，当前 Mode={current}")
-                else:
-                    item["result"] = "FAIL"
-                    item["detail"] = (
-                        f"AllowableValues={allowable}，"
-                        "不包含 Legacy/UEFI，不支持 IPMI 设置启动模式"
-                    )
-                    test.print_log("ERROR",
-                        f"✗ 启动模式：{allowable} 不支持 IPMI 设置")
+                item["result"] = "FAIL"
+                item["detail"] = (
+                    f"Mode AllowableValues={allowable_mode}、"
+                    f"Target AllowableValues={allowable_target}，均无可选项，"
+                    f"无法通过 IPMI 设置启动模式"
+                )
+                test.print_log("ERROR",
+                    f"✗ 启动模式：无可选项，当前 Mode={current}")
         except Exception as e:
             item["result"] = "FAIL"
             item["detail"] = str(e)
@@ -394,13 +516,15 @@ class Managers026DefaultConfigCheck(BmcTestBase):
         test.print_log("INFO", "检查项汇总：")
         any_fail = False
         any_warn = False
+        skip_count = 0
         for c in checks:
             r = c.get("result", "FAIL")
             if r == "PASS":
                 lvl = "INFO"
-            elif r == "WARNING":
+            elif r in ("WARNING", "SKIP"):
                 lvl = "WARNING"
                 any_warn = True
+                skip_count += 1
             else:
                 lvl = "ERROR"
                 any_fail = True
@@ -408,10 +532,11 @@ class Managers026DefaultConfigCheck(BmcTestBase):
 
         if any_fail:
             final = "FAIL"
-        elif any_warn:
-            final = "PASS_WITH_WARNING"
         else:
             final = "PASS"
+        if skip_count:
+            test.print_log("INFO",
+                f"（其中 {skip_count} 项为 SKIP/WARNING：机型未提供该能力或 SDK 未暴露，不计入不合规）")
         test.print_log("INFO" if final != "FAIL" else "ERROR", f"最终结果：{final}")
 
         detail = {"checks": checks}

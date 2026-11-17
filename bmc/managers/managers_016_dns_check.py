@@ -55,34 +55,94 @@ class Managers016DnsCheck(BmcTestBase):
                 password=self.PASSWORD
             )
 
-            # 1. GET DnsService 接口（SDK 1.3.0 类型化接口，URI 由 SDK 自动发现）
-            test.print_log("INFO", "=== 步骤1: 查询 DnsService 配置 ===")
-            dns_data = self.client.get_dns_service()
-            test.print_log("INFO", "DnsService 接口查询成功")
-            checks.append(("DnsService 接口查询成功", True))
+            # 1. 查询 DNS 配置
+            #    OEM 机型可能提供 /Managers/1/DnsService（HostNameConfig + DnsIpConfig），
+            #    但标准 Redfish 并无该资源。缺失时回退到标准字段：
+            #      NetworkProtocol.HostName / FQDN
+            #      EthernetInterfaces[].NameServers
+            test.print_log("INFO", "=== 步骤1: 查询 DNS 配置 ===")
+            dns_data = None
+            try:
+                dns_data = self.client.get_dns_service()
+                test.print_log("INFO", "DnsService 接口查询成功（OEM 资源）")
+                checks.append(("DnsService 接口查询成功", True))
+            except RedfishException as e:
+                test.print_log("INFO", f"未提供 OEM DnsService 资源（{e}），回退到标准字段")
 
-            # 2. HostNameConfig 字段存在且为 dict（OEM 扩展字段，经 extra 保留可属性访问）
-            hostname_config = getattr(dns_data, "HostNameConfig", None)
-            hostname_ok = isinstance(hostname_config, dict)
-            test.print_log("INFO", f"HostNameConfig: {'✓ 存在且为 dict' if hostname_ok else '✗ 缺失或类型不对'}")
-            checks.append(("HostNameConfig 存在且为 dict", hostname_ok))
+            hostname_config = None
+            dns_ip_config = None
+            if dns_data is not None:
+                # 2. HostNameConfig 字段存在且为 dict（OEM 扩展字段）
+                hostname_config = getattr(dns_data, "HostNameConfig", None)
+                hostname_ok = isinstance(hostname_config, dict)
+                test.print_log("INFO",
+                    f"HostNameConfig: {'✓ 存在且为 dict' if hostname_ok else '✗ 缺失或类型不对'}")
+                checks.append(("HostNameConfig 存在且为 dict", hostname_ok))
 
-            # 3. DnsIpConfig 字段存在且为 dict（OEM 扩展字段）
-            dns_ip_config = getattr(dns_data, "DnsIpConfig", None)
-            dns_ip_ok = isinstance(dns_ip_config, dict)
-            test.print_log("INFO", f"DnsIpConfig: {'✓ 存在且为 dict' if dns_ip_ok else '✗ 缺失或类型不对'}")
-            checks.append(("DnsIpConfig 存在且为 dict", dns_ip_ok))
+                # 3. DnsIpConfig 字段存在且为 dict
+                dns_ip_config = getattr(dns_data, "DnsIpConfig", None)
+                dns_ip_ok = isinstance(dns_ip_config, dict)
+                test.print_log("INFO",
+                    f"DnsIpConfig: {'✓ 存在且为 dict' if dns_ip_ok else '✗ 缺失或类型不对'}")
+                checks.append(("DnsIpConfig 存在且为 dict", dns_ip_ok))
 
-            # 4. DnsIpConfig.NameServers 存在（list，可为空）
-            nameservers_ok = False
-            nameservers_val = None
-            if isinstance(dns_ip_config, dict):
-                nameservers_val = dns_ip_config.get("NameServers")
+                # 4. DnsIpConfig.NameServers 存在（list，可为空）
+                nameservers_val = dns_ip_config.get("NameServers") \
+                    if isinstance(dns_ip_config, dict) else None
                 nameservers_ok = isinstance(nameservers_val, list)
-            test.print_log("INFO",
-                f"DnsIpConfig.NameServers: {'✓ 存在且为 list' if nameservers_ok else '✗ 缺失或类型不对'} "
-                f"（值：{nameservers_val}）")
-            checks.append(("DnsIpConfig.NameServers 存在（list）", nameservers_ok))
+                test.print_log("INFO",
+                    f"DnsIpConfig.NameServers: "
+                    f"{'✓ 存在且为 list' if nameservers_ok else '✗ 缺失或类型不对'} "
+                    f"（值：{nameservers_val}）")
+                checks.append(("DnsIpConfig.NameServers 存在（list）", nameservers_ok))
+            else:
+                # ── 标准字段回退路径 ──
+                # 2'. 主机名配置：NetworkProtocol.HostName / FQDN
+                np_data = self.client.get_network_protocol()
+                host_name = getattr(np_data, "host_name", None) \
+                    or getattr(np_data, "HostName", None)
+                fqdn = getattr(np_data, "fqdn", None) \
+                    or getattr(np_data, "FQDN", None)
+                hostname_config = {"HostName": host_name, "FQDN": fqdn}
+                hostname_ok = bool(host_name)
+                test.print_log("INFO",
+                    f"NetworkProtocol.HostName/FQDN: "
+                    f"{'✓' if hostname_ok else '✗'} HostName={host_name!r}, FQDN={fqdn!r}")
+                checks.append(("NetworkProtocol.HostName 存在", hostname_ok))
+
+                # 3'. DNS 服务器列表：EthernetInterfaces[].NameServers
+                nics = self.client.get_manager_ethernet_interfaces()
+                all_ns = []
+                nic_detail = []
+                for nic in nics or []:
+                    ns = getattr(nic, "name_servers", None)
+                    if ns is None:
+                        ns = getattr(nic, "NameServers", None)
+                    static_ns = getattr(nic, "static_name_servers", None)
+                    if static_ns is None:
+                        static_ns = getattr(nic, "StaticNameServers", None)
+                    nic_detail.append({
+                        "Id": getattr(nic, "id", ""),
+                        "NameServers": ns,
+                        "StaticNameServers": static_ns,
+                    })
+                    all_ns.extend(ns or [])
+                    all_ns.extend(static_ns or [])
+
+                dns_ip_config = {"NameServers": all_ns, "Interfaces": nic_detail}
+                dns_ip_ok = len(nic_detail) > 0
+                test.print_log("INFO",
+                    f"EthernetInterfaces 数量={len(nic_detail)}，"
+                    f"NameServers 汇总={all_ns}")
+                checks.append(("EthernetInterfaces 可枚举", dns_ip_ok))
+
+                # 4'. NameServers 为 list（允许为空，表示未配置 DNS 服务器）
+                nameservers_val = all_ns
+                nameservers_ok = isinstance(all_ns, list)
+                test.print_log("INFO",
+                    f"NameServers: {'✓ 存在且为 list' if nameservers_ok else '✗ 类型不对'} "
+                    f"（值：{nameservers_val}）")
+                checks.append(("NameServers 存在（list）", nameservers_ok))
 
             # 记录详细信息
             dns_info["HostNameConfig"] = hostname_config
