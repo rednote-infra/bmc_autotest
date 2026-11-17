@@ -6,6 +6,12 @@
         "BMC_IP": "",
         "UserName": "",
         "PassWord": "",
-        "TimeoutSeconds": 30
+        "TimeoutSeconds": 30,
+        "_comment_TestAccount": "403 场景用的临时测试账号（用完即删）。用户名须符合 RDSV_BMC_080a（4~16 位全英文字母），密码须符合 RDSV_BMC_082（大小写+数字+特殊字符四要素，8~12 位）",
+        "TestAccount": {
+            "UserName": "protocolrotest",
+            "Password": "Proto@2024",
+            "RoleId": "ReadOnly"
+        }
     }
 }

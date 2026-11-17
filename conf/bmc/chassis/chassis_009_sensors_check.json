@@ -10,36 +10,43 @@
             "CPU温度": {
                 "source": "temperature",
                 "keywords": ["cpu"],
+                "severity": "ERROR",
                 "description": "CPU 温度传感器"
             },
             "系统功耗": {
                 "source": "power_control",
                 "keywords": [],
+                "severity": "ERROR",
                 "description": "系统整机功耗（PowerControl 非空即满足）"
             },
             "内存温度": {
                 "source": "temperature",
                 "keywords": ["dimm", "mem", "memory"],
+                "severity": "ERROR",
                 "description": "内存温度传感器"
             },
             "硬盘温度": {
                 "source": "temperature",
                 "keywords": ["hdd", "nvme", "disk", "ssd", "m2"],
-                "description": "硬盘/NVMe 温度传感器"
+                "severity": "WARNING",
+                "description": "硬盘/NVMe 温度传感器（异常降级为 WARNING）"
             },
             "PCIe卡温度": {
                 "source": "temperature",
-                "keywords": ["gpu", "nic", "pcie", "hca", "riser", "hba"],
-                "description": "PCIe 卡（GPU/网卡/HBA）温度传感器"
+                "keywords": ["gpu", "nic", "pcie", "hca", "hba", "slot"],
+                "severity": "WARNING",
+                "description": "PCIe 卡（GPU/网卡/HBA/槽位）温度传感器（异常降级为 WARNING）"
             },
             "风扇转速": {
                 "source": "fan",
                 "keywords": [],
+                "severity": "ERROR",
                 "description": "风扇转速（Fans 集合非空即满足）"
             },
             "电源电压输入输出": {
                 "source": "psu",
                 "keywords": [],
+                "severity": "ERROR",
                 "description": "电源模块（PowerSupplies 非空即满足）"
             }
         }

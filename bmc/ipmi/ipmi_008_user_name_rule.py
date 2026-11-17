@@ -1,12 +1,15 @@
 #!/bin/python
 """
-IPMI 带外用户名规则校验（正反向边界）（RDSV_BMC_080a）
+IPMI 带外用户名规则校验（RDSV_BMC_080a）
 
-正向：4位/16位/全大写/全小写/混合 → 应成功
-反向：17位 → 应失败（报 Username is too long）
-注意：需求要求4~16位，实测3位及以下BMC未拦截，记录为WARNING
+分类规范与 account_007_username_rule_test 保持一致（不重复其全部用例）：
+  正向：4~16 位全英文字母（全小写 / 全大写 / 混合）→ 应成功
+  反向-宽松：长度越界（3位低于下限 / 17位超过上限）→ 应被拦截；
+             未拦截记 WARNING 不 FAIL（OEM 通用版本不强制定制，避免二次开发风险）
+  反向-严格：字符集违规（含数字/特殊字符/下划线/非ASCII）→ 未拦截且真实生效则 FAIL
+             （该组用例由 account_007 覆盖，本脚本暂无此项）
 
-Usage: python3 bmc/ipmi_user_003.py -i <bmc_ip> -u <user> -p <pass>
+Usage: python3 bmc/ipmi/ipmi_008_user_name_rule.py -i <bmc_ip> -u <user> -p <pass>
 """
 
 import os, subprocess, sys, time, traceback

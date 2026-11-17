@@ -24,7 +24,7 @@ Usage: python3 bmc/protocol_001_dmtf_compliance.py -i <bmc_ip> -u <username> -p 
   3. HTTP Method 合规     — GET/POST/PATCH/DELETE 各自幂等性及支持情况
   4. HTTP Header 合规     — Content-Type、Authorization 校验、If-Match 响应
   5. HTTP StatusCode 合规 — 各场景状态码正确（200/201/204/400/401/403/404/405/428 等）
-  6. HTTP Request 合规    — PATCH 空 JSON 不报错、Boot 只传 Boot 属性
+  6. HTTP Request 合规    — PATCH 空 JSON（2xx/4xx 均可）、Boot 只传 Boot 属性
   7. HTTP Response 合规   — Action 204+空/200+error、400/500 必须有 error response 结构
   8. 通用 DMTF 补充       — OData-Version header、必填 @odata 字段、Allow/Location header
 
@@ -75,6 +75,10 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self._session_delete_sc   = -1
         self.BASE_URL      = ''
         self.timeout       = 30
+        # 403 场景测试账号（conf 注入，符合用户名/密码规范；用完即删）
+        self.TEST_ACCOUNT_USER = ''
+        self.TEST_ACCOUNT_PASS = ''
+        self.TEST_ACCOUNT_ROLE = 'ReadOnly'
         # 资源 URI 一律运行时从 ServiceRoot 动态发现（conf 显式配置可覆盖）
         self.chassis_uri   = ''
         self.systems_uri   = ''
@@ -97,6 +101,10 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         URI 类配置项仅在显式配置时覆盖（默认全部运行时动态发现）。
         """
         self.timeout      = int(conf.get("TimeoutSeconds", 30))
+        ta                = conf.get("TestAccount", {}) or {}
+        self.TEST_ACCOUNT_USER = ta.get("UserName", "")
+        self.TEST_ACCOUNT_PASS = ta.get("Password", "")
+        self.TEST_ACCOUNT_ROLE = ta.get("RoleId", "ReadOnly")
         self.chassis_uri  = conf.get("ChassisUri")  or ''
         self.systems_uri  = conf.get("SystemsUri")  or ''
         self.power_uri    = conf.get("PowerUri")    or ''
@@ -511,46 +519,16 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
                      sc_401 == 401, f"HTTP {sc_401}")
 
         # 403：创建 ReadOnly 账号，用其访问需要写权限的接口 → 期望 403
-        # 测试账号：dmtf_ro_test / TestPwd@2024，用完即删
-        _ro_user = "dmtf_ro_test"
-        _ro_pass = "TestPwd@2024"
-        _ro_uid  = None
-        sc_create_ro, body_create_ro, hdrs_create_ro = self._request(
-            "POST", self.accounts_uri,
-            body={"UserName": _ro_user, "Password": _ro_pass, "RoleId": "ReadOnly"},
-            token=token
-        )
-        ro_loc = hdrs_create_ro.get("location", "")
-        if sc_create_ro == 201:
-            # 用 ReadOnly 账号 PATCH 受保护资源 → 期望 403
-            sc_403, _, _ = self._request(
-                "GET", self.chassis_uri,
-                basic_auth=(_ro_user, _ro_pass)
-            )
-            # 先确认 ReadOnly 账号能 GET（200）
-            self._record("403 前置：ReadOnly 账号 GET Chassis → 200", LEVEL_INFO,
-                         sc_403 == 200, f"HTTP {sc_403}")
-            # ReadOnly 账号 PATCH → 期望 403
-            _, body_ch_ro, _ = self._request("GET", self.chassis_uri,
-                                              basic_auth=(_ro_user, _ro_pass))
-            etag_ro = body_ch_ro.get("@odata.etag", "") if isinstance(body_ch_ro, dict) else ""
-            sc_403p, _, _ = self._request(
-                "PATCH", self.chassis_uri, body={},
-                basic_auth=(_ro_user, _ro_pass),
-                extra_headers={"If-Match": etag_ro} if etag_ro else {}
-            )
-            self._record("403 ReadOnly 账号 PATCH 受保护资源 → 403", LEVEL_ERROR,
-                         sc_403p == 403,
-                         f"HTTP {sc_403p}（期望 403；ReadOnly 账号不应有写权限）")
-            # 清理测试账号
-            if ro_loc:
-                self._request("DELETE", ro_loc, token=token)
-                self.log.info(f"  → ReadOnly 测试账号 {_ro_user} 已清理")
-        else:
-            # 账号创建失败（可能已存在或不支持 POST 创建账号）
-            self._record("403 权限拒绝（ReadOnly 账号创建失败，降级为已知信息验证）",
+        # 测试账号由 conf 注入（用户名 4~16 位全英文字母、密码四要素 8~12 位），用完即删
+        _ro_user = self.TEST_ACCOUNT_USER
+        _ro_pass = self.TEST_ACCOUNT_PASS
+        _ro_role = self.TEST_ACCOUNT_ROLE
+        if not (_ro_user and _ro_pass):
+            self._record("403 权限拒绝（测试账号未配置，跳过）",
                          LEVEL_WARNING, False,
-                         f"创建测试账号 HTTP {sc_create_ro}（{body_create_ro!r}）")
+                         "conf 未配置 TestAccount.UserName/Password，无法创建只读账号")
+        else:
+            self._do_check_403(token, _ro_user, _ro_pass, _ro_role)
 
         # 404（构造一个确定不存在的资源路径，基于动态发现的集合 URI 拼接）
         sc_404, _, _ = self._request(
@@ -594,11 +572,12 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
             "GET", self.accounts_uri, token=token
         )
         if sc_acct_col == 200:
-            # 尝试创建与现有账号同名的账号 → 期望 409
+            # 尝试创建与现有账号同名的账号 → 期望 409（密码用规范合规值，此处只验证同名冲突）
             sc_409, body_409, _ = self._request(
                 "POST", self.accounts_uri,
-                body={"UserName": self.USERNAME, "Password": "TestPwd@2024",
-                      "RoleId": "ReadOnly"},
+                body={"UserName": self.USERNAME,
+                      "Password": self.TEST_ACCOUNT_PASS or "Proto@2024",
+                      "RoleId": self.TEST_ACCOUNT_ROLE or "ReadOnly"},
                 token=token
             )
             if sc_409 == 409:
@@ -629,25 +608,75 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
                          f"PowerControl={bool(pwr_body.get('PowerControl'))}, "
                          f"OEM.TotalPower={pwr_body.get('Oem',{}).get('Public',{}).get('TotalPower')}")
 
+    def _do_check_403(self, token, _ro_user, _ro_pass, _ro_role):
+        """创建 ReadOnly 测试账号 → 验证只读账号 PATCH 受保护资源返回 403 → 清理。
+
+        测试账号由 conf 注入（用户名 4~16 位全英文字母、密码四要素 8~12 位），用完即删。
+        """
+        # 显式 Enabled=True：测试前提是账号可登录，否则后续只能验到 401（未启用）
+        # 而非本项要验证的 403（权限不足）
+        sc_create_ro, body_create_ro, hdrs_create_ro = self._request(
+            "POST", self.accounts_uri,
+            body={"UserName": _ro_user, "Password": _ro_pass,
+                  "RoleId": _ro_role, "Enabled": True},
+            token=token
+        )
+        ro_loc = hdrs_create_ro.get("location", "")
+        if sc_create_ro == 201:
+            # 用 ReadOnly 账号 PATCH 受保护资源 → 期望 403
+            sc_403, _, _ = self._request(
+                "GET", self.chassis_uri,
+                basic_auth=(_ro_user, _ro_pass)
+            )
+            # 先确认 ReadOnly 账号能 GET（200）
+            self._record("403 前置：ReadOnly 账号 GET Chassis → 200", LEVEL_INFO,
+                         sc_403 == 200, f"HTTP {sc_403}")
+            # ReadOnly 账号 PATCH → 期望 403
+            _, body_ch_ro, _ = self._request("GET", self.chassis_uri,
+                                              basic_auth=(_ro_user, _ro_pass))
+            etag_ro = body_ch_ro.get("@odata.etag", "") if isinstance(body_ch_ro, dict) else ""
+            sc_403p, _, _ = self._request(
+                "PATCH", self.chassis_uri, body={},
+                basic_auth=(_ro_user, _ro_pass),
+                extra_headers={"If-Match": etag_ro} if etag_ro else {}
+            )
+            self._record("403 ReadOnly 账号 PATCH 受保护资源 → 403", LEVEL_ERROR,
+                         sc_403p == 403,
+                         f"HTTP {sc_403p}（期望 403；ReadOnly 账号不应有写权限）")
+            # 清理测试账号
+            if ro_loc:
+                self._request("DELETE", ro_loc, token=token)
+                self.log.info(f"  → ReadOnly 测试账号 {_ro_user} 已清理")
+        else:
+            # 账号创建失败（可能已存在或不支持 POST 创建账号）
+            self._record("403 权限拒绝（ReadOnly 账号创建失败，降级为已知信息验证）",
+                         LEVEL_WARNING, False,
+                         f"创建测试账号 HTTP {sc_create_ro}（{body_create_ro!r}）")
+
     # ── 6. HTTP Request 合规 ──────────────────────────────
     def check_http_request(self, token):
         self.log.info("=" * 60)
         self.log.info("【6】HTTP Request 合规检查")
 
-        # 6-1 PATCH 支持空 JSON {}（规范明确要求，传空不应报错）
+        # 6-1 PATCH 传空 JSON {}
+        #   DSP0266 §9.6 用词为 "may accept"（服务可选接受空对象）：
+        #     - 接受 → 200/204（无变更）
+        #     - 拒绝 → 4xx（如 400 NoOperation，规范亦认可「无可操作内容」）
+        #   故 2xx 与 4xx 均为合理结果；仅 3xx/5xx/异常视为不合规。
         etag = self._get_etag(self.chassis_uri, token)
         if not etag:
             self.log.warning("  6-1: 未能获取 ETag，跳过 PATCH 空 JSON 检查（记 WARNING）")
-            self._record("PATCH 传空 JSON {} 不报错（200/204）", LEVEL_WARNING,
+            self._record("PATCH 传空 JSON {} 返回 2xx/4xx", LEVEL_WARNING,
                          False, "无法获取 ETag，PATCH 空 JSON 跳过")
         else:
             sc_empty, _, _ = self._request(
                 "PATCH", self.chassis_uri, body={}, token=token,
                 extra_headers={"If-Match": etag}
             )
-            self._record("PATCH 传空 JSON {} 不报错（200/204）", LEVEL_ERROR,
-                         sc_empty in (200, 204),
-                         f"HTTP {sc_empty}（期望 200 或 204）")
+            ok_empty = (200 <= sc_empty < 300) or (400 <= sc_empty < 500)
+            self._record("PATCH 传空 JSON {} 返回 2xx/4xx（DSP0266 may accept）",
+                         LEVEL_ERROR, ok_empty,
+                         f"HTTP {sc_empty}（2xx=接受；4xx=合法拒绝；仅 3xx/5xx 判不合规）")
 
         # 6-2 Boot PATCH：只传 Boot 属性，其余属性不受影响（BootOrder 场景）
         _, body_s, hdrs_s = self._request("GET", self.systems_uri, token=token)

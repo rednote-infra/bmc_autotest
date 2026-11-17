@@ -9,10 +9,11 @@ Update:
             原 pydantic 解析 bug 已随 SDK 升级修复，去除文件 _ 前缀恢复执行
 2026/10/23: 修复真机验证反馈 - 原脚本未区分 Detect 口与 Sharelink(NCSI) 口，
             统一要求 InterfaceEnabled==True 导致 Sharelink 口（我方规范要求默认关闭）
-            被误判 FAIL。识别方式与 managers_026_default_config_check 的
-            _check_sharelink() 保持一致：Oem.Public.NCSIModeSelect 字段存在即为
-            Sharelink 口，该口不再要求 Enabled/IPv4/Speed/Health，仅做基础信息记录；
-            Sharelink 口若意外处于 Enabled 状态记 WARNING 提示（合规判定交由 managers_026）。
+            被误判 FAIL。
+2026/11/16: 网口角色改用统一约定定位（func/bmc_network_function.classify_eth_roles）：
+            序号最小的网口为专用口（Detect），其余为 Sharelink 口。
+            原因：并非所有厂商都提供 Oem.Public.NCSIModeSelect 字段，仅靠该字段
+            会把 Sharelink 口误判为专用口。单网口机型该口即为专用口。
 
 数据来源：get_manager_ethernet_interfaces() → List[EthernetInterface]
 """
@@ -27,23 +28,14 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.bmc_network_function import (
+    classify_eth_roles, ROLE_DETECT, ROLE_SHARELINK,
+)
 
 from redfish_sdk import RedfishClient, RedfishException
 
 MAC_RE = re.compile(r'^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$')
 IPV4_RE = re.compile(r'^\d{1,3}(\.\d{1,3}){3}$')
-
-
-def _is_sharelink_iface(iface) -> bool:
-    """判断某网口是否为 Sharelink(NCSI) 口。
-
-    与 managers_026_default_config_check._check_sharelink() 保持一致的识别标准：
-    网口 Oem.Public 中存在 "NCSIModeSelect" 字段即视为 Sharelink 口。
-    该字段为厂商扩展，非 Sharelink 口（即 Detect 口）不会携带该字段。
-    """
-    oem = getattr(iface, "Oem", None) or {}
-    oem_pub = oem.get("Public", {}) if isinstance(oem, dict) else {}
-    return isinstance(oem_pub, dict) and "NCSIModeSelect" in oem_pub
 
 
 class Managers003EthernetInterfacesCheck(BmcTestBase):
@@ -93,9 +85,10 @@ class Managers003EthernetInterfacesCheck(BmcTestBase):
             if not ok:
                 test.print_log("ERROR", "EthernetInterfaces 集合为空")
             else:
-                for i, iface in enumerate(interfaces):
-                    iface_id = iface.id or f"iface_{i}"
-                    is_sharelink = _is_sharelink_iface(iface)
+                # 按约定定位网口角色：序号最小 = 专用口(Detect)，其余 = Sharelink
+                for iface, role in classify_eth_roles(interfaces):
+                    iface_id = iface.id or "iface_unknown"
+                    is_sharelink = (role == ROLE_SHARELINK)
                     port_type = "Sharelink(NCSI)" if is_sharelink else "Detect"
 
                     # 保存查询到的网口信息
