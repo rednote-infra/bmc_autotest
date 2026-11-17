@@ -22,7 +22,10 @@ from func.bmc_test_base import BmcTestBase
 
 from redfish_sdk import RedfishClient, RedfishException
 
-TARGET_LOG_ID = "AuditLog"
+# 审计日志在不同厂商的命名不同：标准名是 AuditLog，xFusion/iBMC 实际提供
+# SecurityLog（内容为系统安全事件）。按优先级依次尝试，命中任一即算合规。
+TARGET_LOG_IDS = ("AuditLog", "SecurityLog", "OperateLog")
+TARGET_LOG_ID = TARGET_LOG_IDS[0]        # 兼容旧引用
 
 class Managers004cAuditLogCheck(BmcTestBase):
     """BMC 审计日志服务检查
@@ -56,14 +59,28 @@ class Managers004cAuditLogCheck(BmcTestBase):
             )
 
             svcs = self.client.get_manager_log_services()
-            target = next((s for s in svcs if getattr(s, 'id', '') == TARGET_LOG_ID), None)
+            available = [getattr(s, 'id', '') for s in svcs]
+
+            # 按优先级依次尝试各厂商命名（AuditLog -> SecurityLog -> OperateLog）
+            target, hit_id = None, None
+            for want in TARGET_LOG_IDS:
+                target = next((s for s in svcs if getattr(s, 'id', '') == want), None)
+                if target is not None:
+                    hit_id = want
+                    break
 
             # 存在性检查（边界）
             ok = target is not None
-            checks.append((f"LogService '{TARGET_LOG_ID}' 存在", ok))
+            label = f"LogService '{TARGET_LOG_IDS[0]}' 存在"
+            if ok and hit_id != TARGET_LOG_IDS[0]:
+                label = f"LogService '{TARGET_LOG_IDS[0]}' 存在（本机型命名 '{hit_id}'）"
+            checks.append((label, ok))
             if not ok:
-                test.print_log("ERROR", f"未找到 LogService id='{TARGET_LOG_ID}'，已有：{[getattr(s,'id','') for s in svcs]}")
+                test.print_log(
+                    "ERROR",
+                    f"未找到任一审计日志服务 {list(TARGET_LOG_IDS)}，已有：{available}")
             else:
+                test.print_log("INFO", f"命中审计日志服务：{hit_id}")
                 # service_enabled
                 enabled = getattr(target, 'service_enabled', None)
                 test.print_log("INFO", f"service_enabled: {enabled}")
@@ -92,12 +109,12 @@ class Managers004cAuditLogCheck(BmcTestBase):
                 # v1.1.1: 使用 Log.entries.odata_id 动态发现 Entries URL，不再硬编码路径
                 entries_url = target.entries.odata_id if target.entries else None
                 if not entries_url:
-                    test.print_log("ERROR", f"LogService '{TARGET_LOG_ID}' 无 Entries 链接")
+                    test.print_log("ERROR", f"LogService '{hit_id}' 无 Entries 链接")
                     checks.append(("Entries 集合可访问", False))
                 else:
                     test.print_log("INFO", f"动态发现 Entries URL: {entries_url}")
                     # Use SDK get_manager_log_entries() to fetch expanded entries
-                    log_entries = self.client.get_manager_log_entries(TARGET_LOG_ID)
+                    log_entries = self.client.get_manager_log_entries(hit_id)
                     entry_count = len(log_entries)
                     test.print_log("INFO", f"Entries 总数：{entry_count}")
 

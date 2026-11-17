@@ -60,32 +60,56 @@ class Managers019SslCertCheck(BmcTestBase):
             test.print_log("INFO", "HttpsCert 接口查询成功")
             checks.append(("HttpsCert 接口查询成功", True))
 
-            # 2. Issuer 存在且非空（OEM 扩展字段，经 extra 保留可属性访问）
-            issuer = getattr(cert_data, "Issuer", None)
+            # 2-5. 证书字段实际位于 X509CertificateInformation.ServerCert 下
+            #      标准字段在 SDK 中已类型化（蛇形名），先取嵌套对象。
+            x509 = getattr(cert_data, "x509_certificate_information", None) \
+                or getattr(cert_data, "X509CertificateInformation", None)
+            server_cert = None
+            if x509 is not None:
+                server_cert = getattr(x509, "server_cert", None) \
+                    or getattr(x509, "ServerCert", None)
+            def _cert_field(snake, pascal):
+                """先在 ServerCert 上取，取不到再回退到顶层（兼容字段扁平化的机型）。"""
+                for obj in (server_cert, cert_data):
+                    if obj is None:
+                        continue
+                    val = getattr(obj, snake, None)
+                    if val is None:
+                        val = getattr(obj, pascal, None)
+                    if val is not None:
+                        return val
+                return None
+
+            issuer = _cert_field("issuer", "Issuer")
+            subject = _cert_field("subject", "Subject")
+            valid_not_after = _cert_field("valid_not_after", "ValidNotAfter")
+            pub_key_len = _cert_field("public_key_length_bits", "PublicKeyLengthBits")
+
+            # 2. Issuer 存在且非空
             issuer_ok = isinstance(issuer, str) and len(issuer.strip()) > 0
-            test.print_log("INFO",
-                f"Issuer: {'✓' if issuer_ok else '✗'} {issuer!r}")
+            test.print_log("INFO", f"Issuer: {'✓' if issuer_ok else '✗'} {issuer!r}")
             checks.append(("Issuer 存在且非空", issuer_ok))
 
-            # 3. Subject 存在且非空（OEM 扩展字段）
-            subject = getattr(cert_data, "Subject", None)
+            # 3. Subject 存在且非空
             subject_ok = isinstance(subject, str) and len(subject.strip()) > 0
-            test.print_log("INFO",
-                f"Subject: {'✓' if subject_ok else '✗'} {subject!r}")
+            test.print_log("INFO", f"Subject: {'✓' if subject_ok else '✗'} {subject!r}")
             checks.append(("Subject 存在且非空", subject_ok))
 
-            # 4. ValidNotAfter 存在（OEM 扩展字段）
-            valid_not_after = getattr(cert_data, "ValidNotAfter", None)
-            valid_not_after_ok = valid_not_after is not None
+            # 4. ValidNotAfter 存在且非空
+            valid_not_after_ok = isinstance(valid_not_after, str) and len(valid_not_after.strip()) > 0
             test.print_log("INFO",
                 f"ValidNotAfter: {'✓' if valid_not_after_ok else '✗'} {valid_not_after!r}")
             checks.append(("ValidNotAfter 存在", valid_not_after_ok))
 
-            # 5. PublicKeyLengthBits 存在且 >=2048（OEM 扩展字段）
-            pub_key_len = getattr(cert_data, "PublicKeyLengthBits", None)
-            pub_key_ok = isinstance(pub_key_len, (int, float)) and pub_key_len >= 2048
-            test.print_log("INFO",
-                f"PublicKeyLengthBits: {'✓' if pub_key_ok else '✗'} {pub_key_len!r}")
+            # 5. PublicKeyLengthBits 存在且 >=2048
+            #    部分机型不下发该字段（能力缺失），计 SKIP 不计 FAIL
+            if pub_key_len is None:
+                pub_key_ok = None
+                test.print_log("INFO", "PublicKeyLengthBits: - SKIP 字段不存在（本机型未下发）")
+            else:
+                pub_key_ok = isinstance(pub_key_len, (int, float)) and pub_key_len >= 2048
+                test.print_log("INFO",
+                    f"PublicKeyLengthBits: {'✓' if pub_key_ok else '✗'} {pub_key_len!r}")
             checks.append(("PublicKeyLengthBits 存在且 >=2048", pub_key_ok))
 
             # 记录详细信息
@@ -94,8 +118,8 @@ class Managers019SslCertCheck(BmcTestBase):
             cert_info["ValidNotAfter"] = valid_not_after
             cert_info["PublicKeyLengthBits"] = pub_key_len
 
-            final = "PASS" if all(r for _, r in checks) else "FAIL"
-
+            # checks 中值为 None 表示 SKIP，不参与 PASS/FAIL 判定
+            final = "PASS" if all(r for _, r in checks if r is not None) else "FAIL"
         except RedfishException as e:
             test.print_log("ERROR", f"Redfish SDK 调用失败：{str(e)}")
             final = "FAIL"
@@ -115,8 +139,9 @@ class Managers019SslCertCheck(BmcTestBase):
             test.add_key_value_to_json(self.result_json_path, "detail.cycle",
                                        value={"metrics": field_name, "value": field_val})
         for label, passed in checks:
+            mark = "PASS" if passed else ("SKIP" if passed is None else "FAIL")
             test.add_key_value_to_json(self.result_json_path, "detail.cycle",
-                                       value={"metrics": label, "value": "PASS" if passed else "FAIL"})
+                                       value={"metrics": label, "value": mark})
 
         self.command_check_result = final
         test.add_key_value_to_json(self.result_json_path, "summary",

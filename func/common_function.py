@@ -14,6 +14,7 @@ Update:
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -52,6 +53,51 @@ def ping_once(host: str, timeout_sec: int = 2) -> bool:
 def ipmitool_bin() -> str:
     """ipmitool 可执行名（Windows 下无原生 ipmitool，调用方应先 is_windows() 判断跳过）"""
     return "ipmitool.exe" if is_windows() else "ipmitool"
+
+
+# ---------------------------------------------------------------------------
+# 时区偏移归一化
+# ---------------------------------------------------------------------------
+_TZ_PREFIX_RE = re.compile(r"^(UTC|GMT)", re.IGNORECASE)
+_TZ_OFFSET_RE = re.compile(r"^([+-])(\d{1,2}):?(\d{2})?$")
+
+
+def normalize_offset(value) -> str:
+    """把各种时区偏移写法归一成 ``"+08:00"`` / ``"-05:00"``。
+
+    Redfish 规范（DSP0266）**明文允许** ``UTC+hh:mm`` 这种带前缀的形式，
+    不同厂商返回的形态也不一致，直接做字符串比较必然误判。实测遇到的形态::
+
+        "UTC+08:00"  -> "+08:00"
+        "GMT+08:00"  -> "+08:00"
+        "+08:00"     -> "+08:00"
+        "+8:00"      -> "+08:00"      （小时不补零）
+        "UTC"        -> ""            （仅 UTC，无偏移量）
+        "Asia/Tokyo" -> ""            （时区名，非偏移格式，需调用方另行处理）
+        None / ""    -> ""
+
+    Args:
+        value: 原始偏移字符串（或 None）
+
+    Returns:
+        归一化后的 ``±hh:mm`` 字符串；无法识别时返回 ``""``。
+    """
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    s = _TZ_PREFIX_RE.sub("", s).strip()
+    if not s.startswith(("+", "-")):
+        return ""
+    m = _TZ_OFFSET_RE.match(s)
+    if not m:
+        return s
+    sign, hh, mm = m.group(1), int(m.group(2)), m.group(3) or "00"
+    return "%s%02d:%s" % (sign, hh, mm)
+
+
+def offsets_equal(a, b) -> bool:
+    """语义比较两个时区偏移，``UTC+08:00`` 与 ``+08:00`` 视为相等。"""
+    return normalize_offset(a) == normalize_offset(b)
 
 
 class CommonFunction:

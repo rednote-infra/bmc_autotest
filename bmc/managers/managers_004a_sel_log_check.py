@@ -76,7 +76,9 @@ class Managers004aSelLogCheck(BmcTestBase):
             sel_svc, sel_source = find_sel_log_service(self.client, self.LOG_ID)
 
             svcs = self.client.get_manager_log_services()
-            target = next((s for s in svcs if getattr(s, 'id', '') == TARGET_LOG_ID), None)
+            # 直接用公共助手的匹配结果，不再按硬编码 id 精确查找：
+            # 设备实际可能叫 SELLog / SELEventLog，硬编码 "SEL" 会漏匹配。
+            target = sel_svc if sel_source == "Managers" else None
 
             # 存在性检查（边界）—— PASS 判定应是 Managers OR Systems 的关系，
             # Managers 侧找不到时，用公共助手的跨侧查找结果判断 SEL 是否在 Systems 侧，
@@ -126,14 +128,16 @@ class Managers004aSelLogCheck(BmcTestBase):
 
                 # Entries 可访问 + 合规性校验（空列表也 PASS）
                 # v1.1.1: 使用 Log.entries.odata_id 动态发现 Entries URL，不再硬编码路径
+                # 注意：必须用实际命中的 id（可能是 SELLog/SELEventLog），不能用 "SEL"
+                hit_id = getattr(target, 'id', None) or TARGET_LOG_ID
                 entries_url = target.entries.odata_id if target.entries else None
                 if not entries_url:
-                    test.print_log("ERROR", f"LogService '{TARGET_LOG_ID}' 无 Entries 链接")
+                    test.print_log("ERROR", f"LogService '{hit_id}' 无 Entries 链接")
                     checks.append(("Entries 集合可访问", False))
                 else:
                     test.print_log("INFO", f"动态发现 Entries URL: {entries_url}")
                     # Use SDK get_manager_log_entries() to fetch expanded entries
-                    log_entries = self.client.get_manager_log_entries(TARGET_LOG_ID)
+                    log_entries = self.client.get_manager_log_entries(hit_id)
                     entry_count = len(log_entries)
                     test.print_log("INFO", f"Entries 总数：{entry_count}")
 

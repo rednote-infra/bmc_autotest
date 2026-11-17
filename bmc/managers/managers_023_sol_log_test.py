@@ -31,6 +31,7 @@ PASS 标准：
 
 import os
 import time
+import shutil
 import subprocess
 import sys
 import traceback
@@ -54,9 +55,12 @@ class Managers023SolLogTest(BmcTestBase):
             config_path=os.path.join(os.getcwd(), "conf/bmc/managers/managers_023_sol_log_test.json"),
         )
         self.command_check_result = "FAIL"
-        # SOL 原始日志输出路径（放 LOG_DIR；基类 super().__init__() 已创建该目录）
+        # SOL 采集日志落盘路径（result 目录下，与 result_json_path 同层）
         # issue/47：原代码引用了未定义的 self.sol_log_path，采集成功后 open() 崩溃
-        self.sol_log_path = os.path.join(self.LOG_DIR, "sol_capture.log")
+        self.sol_log_path = os.path.join(
+            os.path.dirname(self.result_json_path),
+            self.LOG_BASE_NAME + "_sol.log",
+        )
     def _ipmitool_base_cmd(self) -> list:
         return [
             "ipmitool", "-I", "lanplus",
@@ -96,13 +100,37 @@ class Managers023SolLogTest(BmcTestBase):
                 host=self.BMC_IP, username=self.USERNAME, password=self.PASSWORD
             )
 
-            # ── 1. 查询 SOL 配置（SDK 1.3.0 类型化接口，URI 由 SDK 自动发现）──
-            sol_data = self.client.get_sol_source()
-            # SerialSource/Parameters 为 OEM 扩展字段，经 extra 保留可属性访问
-            serial_source    = getattr(sol_data, "SerialSource", "") or ""
-            parameters       = getattr(sol_data, "Parameters", None) or {}
-            allowable_values = parameters.get("AllowableValues", []) \
-                               if isinstance(parameters, dict) else []
+            # ── 1. 查询 SOL 配置 ──
+            # OEM 机型可能提供 /Managers/1/SOLSourceControlInfo，标准 Redfish 无该资源，
+            # 缺失时回退到 Manager.SerialConsole + SerialInterfaces。
+            sol_data = None
+            serial_source = ""
+            allowable_values = []
+            try:
+                sol_data = self.client.get_sol_source()
+                serial_source = getattr(sol_data, "serial_source", None) \
+                    or getattr(sol_data, "SerialSource", "") or ""
+                parameters = getattr(sol_data, "parameters", None) \
+                    or getattr(sol_data, "Parameters", None) or {}
+                allowable_values = parameters.get("AllowableValues", []) \
+                    if isinstance(parameters, dict) else []
+            except RedfishException as e:
+                test.print_log("INFO", f"未提供 OEM SOLSourceControlInfo 资源（{e}），"
+                                       f"回退到标准 SerialConsole 检查")
+                serial_source = "SerialConsole"
+                try:
+                    manager = self.client.get_manager("1")
+                    sc = getattr(manager, "serial_console", None) \
+                        or getattr(manager, "SerialConsole", None)
+                    if sc is not None:
+                        allowable_values = getattr(sc, "connect_types_supported", None) \
+                            or getattr(sc, "ConnectTypesSupported", None) or []
+                        sc_enabled = getattr(sc, "service_enabled", None)
+                        if sc_enabled is None:
+                            sc_enabled = getattr(sc, "ServiceEnabled", False)
+                        test.print_log("INFO", f"Manager.SerialConsole.ServiceEnabled={sc_enabled}")
+                except Exception as e2:
+                    test.print_log("WARNING", f"读取 SerialConsole 失败：{e2}")
 
             test.print_log("INFO",
                 f"SOL 配置：SerialSource={serial_source}, AllowableValues={allowable_values}")
@@ -126,9 +154,35 @@ class Managers023SolLogTest(BmcTestBase):
             except Exception:
                 pass
 
-        # ── 2. ipmitool sol activate + 采集日志 ──────────────────────────
+        # ── 2. ipmitool sol activate + 采集日志 ──────────────────────
+        # 前置检查：ipmitool 不存在时直接 SKIP（环境缺失，非被测对象缺陷）
+        if shutil.which("ipmitool") is None:
+            test.print_log("WARNING", "环境无 ipmitool，SOL 采集步骤 SKIP（不影响 SOL 配置项判定）")
+            checks.append(("ipmitool 可用", None))
+            detail["sol_capture"] = {
+                "skipped": True,
+                "reason":  "ipmitool_not_found",
+            }
+            # 跳过采集，直接进入结果汇总
+            final = "PASS" if all(r for _, r in checks if r is not None) else "FAIL"
+            for label, ok in checks:
+                mark = "✓" if ok else ("-" if ok is None else "✗")
+                test.print_log("INFO" if ok is not False else "ERROR", f"{mark} {label}")
+            test.print_log("INFO" if final == "PASS" else "ERROR", f"测试结束，结果：{final}")
+            detail["checks"] = [
+                {"label": l, "result": "PASS" if r else ("SKIP" if r is None else "FAIL")}
+                for l, r in checks
+            ]
+            test.add_key_value_to_json(self.result_json_path, "detail.cycle", value=detail)
+            test.add_key_value_to_json(self.result_json_path, "summary",
+                                       value={"metrics": self.TEST_NAME, "value": final})
+            with open(self.result_csv_path, "a", encoding="utf-8") as f:
+                f.write(f"{self.TEST_NUM},{final}\n")
+            self.command_check_result = final
+            return
+
+        # SOL 配置不可用（如 BMC 未实现 SOLSourceControlInfo）→ 连接采集无意义，跳过
         if not sol_supported:
-            # SOL 配置不可用（如 BMC 未实现 SOLSourceControlInfo）→ 连接采集无意义，跳过
             test.print_log("WARNING",
                 "SOL 配置查询失败（BMC 可能未实现 SOL），跳过连接与日志采集")
             checks.append(("SOL 连接建立成功", False))
@@ -215,7 +269,8 @@ class Managers023SolLogTest(BmcTestBase):
                     "result":       "PASS" if sol_bytes > 0 else "FAIL",
                 }
             finally:
-                # 无论采集成功/异常，均确保 SOL 连接断开与进程回收
+                # 确保 SOL 连接不残留：无论采集成功/异常都执行一次 deactivate，
+                # 并回收可能残留的子进程（防 SOL 会话被长期占用）
                 if proc is not None and proc.poll() is None:
                     try:
                         proc.kill()

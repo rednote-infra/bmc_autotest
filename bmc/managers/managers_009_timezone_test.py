@@ -18,6 +18,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.common_function import normalize_offset
 
 from redfish_sdk import RedfishClient, RedfishException
 
@@ -71,7 +72,9 @@ class Managers009TimezoneTest(BmcTestBase):
             checks.append(("查询当前时区成功", True))
 
             # 【默认值校验】是否默认为东八区
-            if original_offset == DEFAULT_TIMEZONE:
+            # BMC 返回 "UTC+08:00" 而期望值是 "+08:00"（Redfish 规范明文允许
+            # UTC 前缀），必须归一化后比较，否则字符串不等会误判 FAIL。
+            if normalize_offset(original_offset) == DEFAULT_TIMEZONE:
                 test.print_log("INFO", f"✓ 时区默认为东八区（DateTimeLocalOffset={original_offset}）")
                 checks.append(("默认时区为东八区", True))
             else:
@@ -88,7 +91,8 @@ class Managers009TimezoneTest(BmcTestBase):
             new_offset = mgr.date_time_local_offset or ""
             new_datetime = mgr.date_time or ""
             test.print_log("INFO", f"修改后时区: DateTimeLocalOffset={new_offset}, DateTime={new_datetime}")
-            checks.append(("时区修改验证", new_offset == TEST_TIMEZONE))
+            checks.append(("时区修改验证",
+                           normalize_offset(new_offset) == TEST_TIMEZONE))
             tz_info["after_change"] = {
                 "DateTimeLocalOffset": new_offset,
                 "DateTime": new_datetime,
@@ -103,7 +107,9 @@ class Managers009TimezoneTest(BmcTestBase):
             mgr = self.client.get_manager()
             restored_offset = mgr.date_time_local_offset or ""
             test.print_log("INFO", f"恢复后时区: DateTimeLocalOffset={restored_offset}")
-            checks.append(("时区恢复验证", restored_offset == original_offset))
+            checks.append(("时区恢复验证",
+                           normalize_offset(restored_offset)
+                           == normalize_offset(original_offset)))
             tz_info["after_restore"] = {
                 "DateTimeLocalOffset": restored_offset,
             }
