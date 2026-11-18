@@ -19,6 +19,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.log_entry_helper import fetch_log_entries_sampled, describe_sampling
 
 from redfish_sdk import RedfishClient, RedfishException
 
@@ -33,7 +34,7 @@ class Managers004bOperateLogCheck(BmcTestBase):
     - service_enabled == True
     - max_number_of_records > 0（边界：0 为异常）
     - overwrite_policy 非空（等价类：WrapsWhenFull / NeverOverwrites 均合法）
-    - Entries 集合可访问，get_manager_log_entries 返回列表（空列表也 PASS，代表无日志）
+    - Entries 集合可访问，有界采样读取成功（空列表也 PASS，代表无日志）
     """
 
     def __init__(self, case: str):
@@ -96,9 +97,19 @@ class Managers004bOperateLogCheck(BmcTestBase):
                     checks.append(("Entries 集合可访问", False))
                 else:
                     test.print_log("INFO", f"动态发现 Entries URL: {entries_url}")
-                    # Use SDK get_manager_log_entries() to fetch expanded entries
-                    log_entries = self.client.get_manager_log_entries(TARGET_LOG_ID)
-                    entry_count = len(log_entries)
+                    # v1.4.0: 有界采样替代全量展开。
+                    # 历史实现 get_manager_log_entries() 逐条 GET 全部条目，
+                    # 真机实测 OperateLog 9487 条需 1991 s，被 runner 的 120 s
+                    # 超时机制强制杀死（该用例此前从未真正执行完）。校验只需前
+                    # 10 条，故改为读集合首页（Members@odata.count + 内联成员）
+                    # 再补一页中段抽样，总数与校验语义保持不变。
+                    sampling = fetch_log_entries_sampled(self.client, entries_url)
+                    test.print_log("INFO", describe_sampling(sampling))
+                    if sampling["error"]:
+                        test.print_log("ERROR", f"Entries 集合读取失败：{sampling['error']}")
+
+                    log_entries = sampling["entries"]
+                    entry_count = sampling["total"]
                     test.print_log("INFO", f"Entries 总数：{entry_count}")
 
                     ok = entry_count >= 0
