@@ -28,6 +28,7 @@ from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
 
 from redfish_sdk import RedfishClient, RedfishException  # noqa: F401
+from redfish_sdk.models.cooling import Fan as StandaloneFan
 
 VALID_HEALTH       = {"OK", "Warning", "Critical"}
 VALID_READING_UNITS = {"RPM", "Percent"}
@@ -180,6 +181,65 @@ class FansInfoCheck(BmcTestBase):
         }
         return all_pass, fan_info
 
+    def _check_standalone_fan(self, fan) -> tuple:
+        """
+        校验独立 Fan 资源（ThermalSubsystem/Fans 下的 Fan.v1_x schema）。
+        :return: (all_pass: bool, fan_info: dict)
+        """
+        fan_id = fan.id or fan.name or fan.odata_id or "unknown"
+        speed = fan.speed_percent
+        speed_rpm = speed.speed_rpm if speed else None
+        speed_pct = speed.reading if speed else None
+        health = fan.status.health if fan.status else None
+        all_pass = True
+
+        if not fan.id:
+            CommonFunction.print_log("ERROR", f"[Fan] {fan_id}：Id 为空或 None")
+            all_pass = False
+        else:
+            CommonFunction.print_log("INFO", f"[Fan] {fan_id}：Id = {fan.id}")
+
+        if not isinstance(speed_rpm, (int, float)) or speed_rpm < 0:
+            CommonFunction.print_log(
+                "ERROR", f"[Fan] {fan_id}：SpeedPercent.SpeedRPM = {speed_rpm}，应为非负数"
+            )
+            all_pass = False
+        else:
+            CommonFunction.print_log("INFO", f"[Fan] {fan_id}：SpeedPercent.SpeedRPM = {speed_rpm}")
+
+        if not isinstance(speed_pct, (int, float)) or speed_pct < 0:
+            CommonFunction.print_log(
+                "ERROR", f"[Fan] {fan_id}：SpeedPercent.Reading = {speed_pct}，应为非负数"
+            )
+            all_pass = False
+        else:
+            CommonFunction.print_log("INFO", f"[Fan] {fan_id}：SpeedPercent.Reading = {speed_pct}")
+
+        if health not in VALID_HEALTH:
+            CommonFunction.print_log(
+                "ERROR",
+                f"[Fan] {fan_id}：Status.Health = '{health}'，不在允许值 {VALID_HEALTH} 内"
+            )
+            all_pass = False
+        else:
+            CommonFunction.print_log("INFO", f"[Fan] {fan_id}：Status.Health = {health}")
+
+        if not fan.physical_context or not str(fan.physical_context).strip():
+            CommonFunction.print_log("WARNING", f"[Fan] {fan_id}：PhysicalContext 为空或 None")
+        else:
+            CommonFunction.print_log("INFO", f"[Fan] {fan_id}：PhysicalContext = {fan.physical_context}")
+
+        fan_info = {
+            "member_id":        fan.id or "",
+            "physical_context": fan.physical_context or "",
+            "reading":          speed_rpm,
+            "reading_units":    "RPM" if speed_rpm is not None else "",
+            "max_reading_range": fan.rated_speed_rpm,
+            "health":           health or "",
+            "check_result":     "PASS" if all_pass else "FAIL",
+        }
+        return all_pass, fan_info
+
     # ── 主检查流程 ───────────────────────────────────────────────────────────
 
     def fans_info_check(self) -> tuple:
@@ -197,7 +257,10 @@ class FansInfoCheck(BmcTestBase):
         CommonFunction.print_log("INFO", f"共获取到 {len(fan_list)} 个风扇，开始逐一校验")
         results, fan_info_list = [], []
         for fan in fan_list:
-            passed, fan_info = self._check_single_fan(fan)
+            if isinstance(fan, StandaloneFan):
+                passed, fan_info = self._check_standalone_fan(fan)
+            else:
+                passed, fan_info = self._check_single_fan(fan)
             results.append(passed)
             fan_info_list.append(fan_info)
 
