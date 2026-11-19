@@ -6,6 +6,7 @@ Usage: python3 bmc/managers_019_ssl_cert_check.py -i <bmc_ip> -u <username> -p <
 Update:
 2026/05/11: 新增，BMC HTTPS SSL 证书检查，验证 Issuer/Subject/ValidNotAfter/PublicKeyLengthBits
 2026/10/16: SDK 1.3.0 适配 - 改用 get_https_cert() 类型化接口，URI 由 SDK 自动发现（issue/8）
+2026/11/19: 新增 DMTF 标准路径优先 - 优先走 ManagerNetworkProtocol.HTTPS.Certificates 集合逐成员校验，不可用时回退 OEM HttpsCert
 """
 
 import os
@@ -26,7 +27,8 @@ class Managers019SslCertCheck(BmcTestBase):
 
     用例编号：Redfish_Managers_019
     测试内容：
-    - GET /redfish/v1/Managers/1/SecurityService/HttpsCert 接口可达
+    - 优先走 DMTF 标准路径：ManagerNetworkProtocol.HTTPS.Certificates 集合，
+      逐个成员证书校验；标准路径不可用时回退 OEM SecurityService/HttpsCert
     - Issuer 存在且非空
     - Subject 存在且非空
     - ValidNotAfter 存在
@@ -54,45 +56,100 @@ class Managers019SslCertCheck(BmcTestBase):
                 password=self.PASSWORD
             )
 
-            # 1. GET HttpsCert 接口（SDK 1.3.0 类型化接口，URI 由 SDK 自动发现）
-            test.print_log("INFO", "=== 步骤1: 查询 HttpsCert 配置 ===")
-            cert_data = self.client.get_https_cert()
-            test.print_log("INFO", "HttpsCert 接口查询成功")
-            checks.append(("HttpsCert 接口查询成功", True))
+            # 1. 新增：优先尝试 DMTF 标准路径（ManagerNetworkProtocol.HTTPS.Certificates），
+            #    可用则逐成员证书校验；不可用则走原本的 OEM HttpsCert 获取
+            test.print_log("INFO", "=== 步骤1: 查询 HTTPS 证书 ===")
+            std_ok = False
+            try:
+                cert_collection = self.client.get_https_certificates()
+                members = list(cert_collection.members or [])
+                test.print_log("INFO",
+                    f"标准路径查询成功，证书数量：{len(members)}")
+                checks.append(("HTTPS 证书集合（标准路径）查询成功", True))
 
-            # 2. Issuer 存在且非空（OEM 扩展字段，经 extra 保留可属性访问）
-            issuer = getattr(cert_data, "Issuer", None)
-            issuer_ok = isinstance(issuer, str) and len(issuer.strip()) > 0
-            test.print_log("INFO",
-                f"Issuer: {'✓' if issuer_ok else '✗'} {issuer!r}")
-            checks.append(("Issuer 存在且非空", issuer_ok))
+                # 逐成员证书校验（只使用 BMC 返回的字段）
+                for idx, member in enumerate(members, start=1):
+                    prefix = f"[证书{idx}]"
+                    cert_raw = self.client.get_raw(member.odata_id)
 
-            # 3. Subject 存在且非空（OEM 扩展字段）
-            subject = getattr(cert_data, "Subject", None)
-            subject_ok = isinstance(subject, str) and len(subject.strip()) > 0
-            test.print_log("INFO",
-                f"Subject: {'✓' if subject_ok else '✗'} {subject!r}")
-            checks.append(("Subject 存在且非空", subject_ok))
+                    # Issuer 存在且非空
+                    issuer = cert_raw.get("Issuer")
+                    issuer_ok = bool(issuer)
+                    test.print_log("INFO",
+                        f"{prefix} Issuer: {'✓' if issuer_ok else '✗'} {issuer!r}")
+                    checks.append((f"{prefix} Issuer 存在且非空", issuer_ok))
 
-            # 4. ValidNotAfter 存在（OEM 扩展字段）
-            valid_not_after = getattr(cert_data, "ValidNotAfter", None)
-            valid_not_after_ok = valid_not_after is not None
-            test.print_log("INFO",
-                f"ValidNotAfter: {'✓' if valid_not_after_ok else '✗'} {valid_not_after!r}")
-            checks.append(("ValidNotAfter 存在", valid_not_after_ok))
+                    # Subject 存在且非空
+                    subject = cert_raw.get("Subject")
+                    subject_ok = bool(subject)
+                    test.print_log("INFO",
+                        f"{prefix} Subject: {'✓' if subject_ok else '✗'} {subject!r}")
+                    checks.append((f"{prefix} Subject 存在且非空", subject_ok))
 
-            # 5. PublicKeyLengthBits 存在且 >=2048（OEM 扩展字段）
-            pub_key_len = getattr(cert_data, "PublicKeyLengthBits", None)
-            pub_key_ok = isinstance(pub_key_len, (int, float)) and pub_key_len >= 2048
-            test.print_log("INFO",
-                f"PublicKeyLengthBits: {'✓' if pub_key_ok else '✗'} {pub_key_len!r}")
-            checks.append(("PublicKeyLengthBits 存在且 >=2048", pub_key_ok))
+                    # ValidNotAfter 存在
+                    valid_not_after = cert_raw.get("ValidNotAfter")
+                    valid_not_after_ok = valid_not_after is not None
+                    test.print_log("INFO",
+                        f"{prefix} ValidNotAfter: {'✓' if valid_not_after_ok else '✗'} {valid_not_after!r}")
+                    checks.append((f"{prefix} ValidNotAfter 存在", valid_not_after_ok))
 
-            # 记录详细信息
-            cert_info["Issuer"] = issuer
-            cert_info["Subject"] = subject
-            cert_info["ValidNotAfter"] = valid_not_after
-            cert_info["PublicKeyLengthBits"] = pub_key_len
+                    # PublicKeyLengthBits 存在且 >=2048
+                    pub_key_len = cert_raw.get("PublicKeyLengthBits")
+                    pub_key_ok = isinstance(pub_key_len, (int, float)) and pub_key_len >= 2048
+                    test.print_log("INFO",
+                        f"{prefix} PublicKeyLengthBits: {'✓' if pub_key_ok else '✗'} {pub_key_len!r}")
+                    checks.append((f"{prefix} PublicKeyLengthBits 存在且 >=2048", pub_key_ok))
+
+                    # 记录详细信息
+                    cert_info[f"{prefix}Issuer"] = issuer
+                    cert_info[f"{prefix}Subject"] = subject
+                    cert_info[f"{prefix}ValidNotAfter"] = valid_not_after
+                    cert_info[f"{prefix}PublicKeyLengthBits"] = pub_key_len
+
+                std_ok = True
+            except RedfishException as std_err:
+                test.print_log("INFO",
+                    f"标准路径不可用（{str(std_err)}），走 OEM HttpsCert")
+
+            # 2. 原本脚本的获取不变：OEM HttpsCert 类型化接口（标准路径不可用时执行）
+            if not std_ok:
+                cert_data = self.client.get_https_cert()
+                test.print_log("INFO", "HttpsCert 接口查询成功")
+                checks.append(("HttpsCert 接口查询成功", True))
+
+                # Issuer 存在且非空（OEM 扩展字段，经 extra 保留可属性访问）
+                issuer = getattr(cert_data, "Issuer", None)
+                issuer_ok = isinstance(issuer, str) and len(issuer.strip()) > 0
+                test.print_log("INFO",
+                    f"Issuer: {'✓' if issuer_ok else '✗'} {issuer!r}")
+                checks.append(("Issuer 存在且非空", issuer_ok))
+
+                # Subject 存在且非空（OEM 扩展字段）
+                subject = getattr(cert_data, "Subject", None)
+                subject_ok = isinstance(subject, str) and len(subject.strip()) > 0
+                test.print_log("INFO",
+                    f"Subject: {'✓' if subject_ok else '✗'} {subject!r}")
+                checks.append(("Subject 存在且非空", subject_ok))
+
+                # ValidNotAfter 存在（OEM 扩展字段）
+                valid_not_after = getattr(cert_data, "ValidNotAfter", None)
+                valid_not_after_ok = valid_not_after is not None
+                test.print_log("INFO",
+                    f"ValidNotAfter: {'✓' if valid_not_after_ok else '✗'} {valid_not_after!r}")
+                checks.append(("ValidNotAfter 存在", valid_not_after_ok))
+
+                # PublicKeyLengthBits 存在且 >=2048（OEM 扩展字段）
+                pub_key_len = getattr(cert_data, "PublicKeyLengthBits", None)
+                pub_key_ok = isinstance(pub_key_len, (int, float)) and pub_key_len >= 2048
+                test.print_log("INFO",
+                    f"PublicKeyLengthBits: {'✓' if pub_key_ok else '✗'} {pub_key_len!r}")
+                checks.append(("PublicKeyLengthBits 存在且 >=2048", pub_key_ok))
+
+                # 记录详细信息
+                cert_info["Issuer"] = issuer
+                cert_info["Subject"] = subject
+                cert_info["ValidNotAfter"] = valid_not_after
+                cert_info["PublicKeyLengthBits"] = pub_key_len
 
             final = "PASS" if all(r for _, r in checks) else "FAIL"
 
