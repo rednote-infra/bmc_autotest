@@ -5,14 +5,14 @@ Date: 2026/04/22
 Usage: python3 bmc/chassis_007a_nvme_led_positive.py -i <bmc_ip> -u <username> -p <password>
 Update:
 2026/04/22: 新增
-2026/06/23: 改写为 redfish_sdk v1.1.0 类型化接口（set_drive_indicator_led / get_drive）
+2026/10/29: 支持 LocationIndicatorActive，并兼容旧版 IndicatorLED
 
-数据来源：get_drives() → List[Drive]（含 protocol/media_type/indicator_led，v1.1.0 新增字段）
-          set_drive_indicator_led(<drive.odata_id>, "<value>")（写，v1.1.0）
+数据来源：get_drives() → List[Drive]
+          set_drive_location_indicator() / set_drive_indicator_led()
 
 校验策略（正向测试）：
   遍历所有 Drive，按 Protocol 分类处理：
-    - NVMe SSD（Protocol=NVMe，MediaType=SSD）：必须支持 IndicatorLED，否则 FAIL
+    - NVMe SSD 必须支持 LocationIndicatorActive 或 IndicatorLED，否则 FAIL
     - 其余（SATA/SAS 等）：不在本用例范围内，记 SKIP
 
   对 NVMe SSD，依次切换 Lit / Off 两态（部分 BMC 不支持 Blinking），
@@ -20,7 +20,7 @@ Update:
   测试结束后末态本身即 Off，无需额外回滚。
 
   PASS 条件：所有 NVMe SSD 切换全部成功，非 NVMe 盘跳过不影响结果
-  FAIL 条件：NVMe SSD 不支持 IndicatorLED，或任意态切换/回读超时失败
+  FAIL 条件：BMC 未声明定位灯能力，或任意态切换/回读超时失败
 """
 
 import os
@@ -36,12 +36,25 @@ from func.bmc_test_base import BmcTestBase
 from redfish_sdk import RedfishClient, RedfishException  # noqa: F401
 
 LED_STATES = ["Lit", "Off"]  # 默认不含 Blinking，部分 BMC 不支持，由配置 LedStates 覆盖
+MODERN_INDICATOR = "LocationIndicatorActive"
+LEGACY_INDICATOR = "IndicatorLED"
+
+
+def advertised_indicator_property(drive):
+    """Return the preferred indicator property advertised by a Drive."""
+    fields = getattr(drive, "model_fields_set", set())
+    if "location_indicator_active" in fields:
+        return MODERN_INDICATOR
+    if "indicator_led" in fields:
+        return LEGACY_INDICATOR
+    return None
+
 
 class ChassisNVMELEDPositiveCheck(BmcTestBase):
     """Chassis NVMe 指示灯操作测试（正向）
 
     用例编号：Redfish_Chassis_007a
-    检查项：遍历所有 Drive，NVMe SSD 必须支持 IndicatorLED 切换验证，非 NVMe 盘记 SKIP
+    检查项：验证 NVMe Drive 声明的标准或旧版定位灯属性，非 NVMe 盘记 SKIP
     """
 
     def __init__(self, case: str):
@@ -66,55 +79,86 @@ class ChassisNVMELEDPositiveCheck(BmcTestBase):
 
     # ── 单步切换 + 回读验证 ────────────────────────────────────────────────
 
-    def _set_and_verify(self, drive_odata_id: str, drive_name: str, target_state: str) -> dict:
+    def _set_and_verify(
+        self,
+        drive_odata_id: str,
+        drive_name: str,
+        target_state: str,
+        indicator_property: str,
+    ) -> dict:
         step_result = {
             "drive": drive_name,
             "state": target_state,
+            "indicator_property": indicator_property,
             "patch_success": False,
             "read_back": None,
             "match": False,
             "result": "FAIL",
         }
 
-        # 写入（v1.1.0：set_drive_indicator_led 内部校验合法值并 PATCH）
-        try:
-            self.client.set_drive_indicator_led(drive_odata_id, target_state)
-            step_result["patch_success"] = True
-            CommonFunction.print_log("INFO", f"[{drive_name}] set_drive_indicator_led={target_state} 成功")
-        except RedfishException as e:
-            CommonFunction.print_log("ERROR", f"[{drive_name}] set_drive_indicator_led={target_state} 失败：{str(e)}")
+        if indicator_property == MODERN_INDICATOR and target_state not in ("Lit", "Off"):
+            CommonFunction.print_log(
+                "ERROR",
+                f"[{drive_name}] LocationIndicatorActive cannot represent {target_state}",
+            )
             return step_result
 
-        # 轮询回读，直到状态同步或超时（v1.1.0：get_drive().indicator_led）
+        try:
+            if indicator_property == MODERN_INDICATOR:
+                expected = target_state == "Lit"
+                self.client.set_drive_location_indicator(drive_odata_id, expected)
+            else:
+                expected = target_state
+                self.client.set_drive_indicator_led(drive_odata_id, expected)
+            step_result["patch_success"] = True
+            CommonFunction.print_log(
+                "INFO",
+                f"[{drive_name}] {indicator_property}={expected} updated successfully",
+            )
+        except RedfishException as e:
+            CommonFunction.print_log(
+                "ERROR",
+                f"[{drive_name}] failed to update {indicator_property}: {str(e)}",
+            )
+            return step_result
+
         for attempt in range(1, self.MAX_RETRY + 1):
             time.sleep(self.READ_BACK_DELAY)
             try:
-                actual = self.client.get_drive(drive_odata_id).indicator_led
+                drive = self.client.get_drive(drive_odata_id)
+                if indicator_property == MODERN_INDICATOR:
+                    actual = drive.location_indicator_active
+                else:
+                    actual = drive.indicator_led
                 step_result["read_back"] = actual
                 CommonFunction.print_log(
                     "INFO",
-                    f"[{drive_name}] 第{attempt}次回读 IndicatorLED={actual}（期望：{target_state}）"
+                    f"[{drive_name}] read {indicator_property}={actual} "
+                    f"(expected {expected}, attempt {attempt})",
                 )
             except RedfishException as e:
                 CommonFunction.print_log("ERROR", f"[{drive_name}] 回读 Drive 失败：{str(e)}")
                 return step_result
 
-            if actual == target_state:
+            if actual == expected:
                 step_result["match"] = True
                 step_result["result"] = "PASS"
-                CommonFunction.print_log("INFO", f"[{drive_name}] IndicatorLED={target_state} 验证通过 ✓")
+                CommonFunction.print_log(
+                    "INFO",
+                    f"[{drive_name}] {indicator_property}={expected} verified",
+                )
                 return step_result
             else:
                 if attempt < self.MAX_RETRY:
                     CommonFunction.print_log(
                         "WARNING",
-                        f"[{drive_name}] 状态未同步（期望 {target_state}，实际 {actual}），"
+                        f"[{drive_name}] 状态未同步（期望 {expected}，实际 {actual}），"
                         f"等待 {self.READ_BACK_DELAY}s 后重试（{attempt}/{self.MAX_RETRY}）"
                     )
                 else:
                     CommonFunction.print_log(
                         "ERROR",
-                        f"[{drive_name}] IndicatorLED 回读超时：期望 {target_state}，实际 {actual}，"
+                        f"[{drive_name}] {indicator_property} 回读超时：期望 {expected}，实际 {actual}，"
                         f"已重试 {self.MAX_RETRY} 次"
                     )
 
@@ -139,6 +183,7 @@ class ChassisNVMELEDPositiveCheck(BmcTestBase):
 
         CommonFunction.print_log("INFO", f"共找到 {len(drives)} 块 Drive")
 
+        nvme_count = 0
         tested_count = 0
         for drive in drives:
             drive_odata_id = drive.odata_id
@@ -165,43 +210,66 @@ class ChassisNVMELEDPositiveCheck(BmcTestBase):
                 })
                 continue
 
-            # NVMe SSD：必须支持 IndicatorLED
-            if drive.indicator_led is None:
+            nvme_count += 1
+            indicator_property = advertised_indicator_property(drive)
+            if indicator_property is None:
                 CommonFunction.print_log(
                     "ERROR",
-                    f"[{drive_name}] NVMe SSD 缺少 IndicatorLED 字段"
+                    f"[{drive_name}] BMC capability failure: Drive advertises neither "
+                    "LocationIndicatorActive nor IndicatorLED",
                 )
                 result_list.append({
                     "drive": drive_name,
-                    "state": "MISSING",
+                    "state": "UNSUPPORTED",
+                    "indicator_property": None,
                     "patch_success": False,
                     "read_back": None,
                     "match": False,
                     "result": "FAIL",
+                    "description": (
+                        "BMC Drive resource advertises neither "
+                        "LocationIndicatorActive nor IndicatorLED"
+                    ),
                 })
                 overall = "FAIL"
                 continue
 
             CommonFunction.print_log(
                 "INFO",
-                f"开始测试 [{drive_name}]（Protocol={protocol} MediaType={media_type}）"
+                f"开始测试 [{drive_name}]（Protocol={protocol} MediaType={media_type}，"
+                f"IndicatorProperty={indicator_property}）"
             )
             tested_count += 1
 
             for state in self.LED_STATES:
-                step = self._set_and_verify(drive_odata_id, drive_name, state)
+                step = self._set_and_verify(
+                    drive_odata_id,
+                    drive_name,
+                    state,
+                    indicator_property,
+                )
                 result_list.append(step)
                 if step["result"] == "FAIL":
                     overall = "FAIL"
                     try:
-                        self.client.set_drive_indicator_led(drive_odata_id, "Off")
+                        if indicator_property == MODERN_INDICATOR:
+                            self.client.set_drive_location_indicator(drive_odata_id, False)
+                        else:
+                            self.client.set_drive_indicator_led(drive_odata_id, "Off")
                     except RedfishException:
                         pass
                     break  # 当前盘跳过剩余状态
 
-        # 没有找到任何 NVMe SSD，测试无效
-        if tested_count == 0:
+        if nvme_count == 0:
             CommonFunction.print_log("ERROR", "未找到任何 NVMe SSD Drive，测试无效")
+            return "FAIL", result_list
+
+        if tested_count == 0:
+            CommonFunction.print_log(
+                "ERROR",
+                "BMC capability failure: all NVMe SSD Drive resources advertise "
+                "neither LocationIndicatorActive nor IndicatorLED",
+            )
             return "FAIL", result_list
 
         if not result_list:
@@ -246,8 +314,9 @@ class ChassisNVMELEDPositiveCheck(BmcTestBase):
                 continue
             test.add_key_value_to_json(
                 self.result_json_path, "detail.cycle",
-                value={"metrics": f"{s['drive']} IndicatorLED={s['state']}",
-                       "value": s["result"], "read_back": s.get("read_back")}
+                value={"metrics": f"{s['drive']} {s.get('indicator_property') or 'DriveIndicator'}={s['state']}",
+                       "value": s["result"], "read_back": s.get("read_back"),
+                       "description": s.get("description")}
             )
         test.add_key_value_to_json(
             self.result_json_path, "summary",
