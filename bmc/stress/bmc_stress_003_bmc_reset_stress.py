@@ -103,13 +103,14 @@ def _wait_ping(bmc_ip: str, test: CommonFunction,
     return False, elapsed
 
 def _wait_redfish(bmc_ip: str, username: str, password: str,
-                  test: CommonFunction, reset_start: float, timeout: int) -> tuple:
+                  test: CommonFunction, reset_start: float, timeout: int,
+                  system_id: str) -> tuple:
     """等待 Redfish 恢复（从 reset_start 开始计时），返回 (success, elapsed_s, manufacturer)"""
     test.print_log("INFO", f"等待 Redfish 接口恢复（超时 {timeout}s）...")
     while time.time() - reset_start < timeout:
         try:
             client = RedfishClient(host=bmc_ip, username=username, password=password)
-            manufacturer = client.get_manufacturer()
+            manufacturer = client.get_manufacturer(system_id=system_id)
             client.close()
             elapsed = int(time.time() - reset_start)
             test.print_log("INFO", f"Redfish 恢复，耗时 {elapsed}s，Manufacturer={manufacturer}")
@@ -210,6 +211,16 @@ class BmcStress003BmcResetStress(BmcTestBase):
             f"恢复后等待缓冲：{BUFFER_SEC}s")
         test.print_log("INFO", "测试开始")
 
+        self.client = RedfishClient(
+            host=self.BMC_IP,
+            username=self.USERNAME,
+            password=self.PASSWORD,
+        )
+        if not self.prepare_system_client():
+            self.client.close()
+            return
+        self.client.close()
+
         start_ts   = time.time()
         round_num  = 0
         all_pass   = True
@@ -280,7 +291,7 @@ class BmcStress003BmcResetStress(BmcTestBase):
             # ── 3. 等待 Redfish 恢复（≤ 10min，从 reset_start 计时） ──────
             redfish_ok, redfish_elapsed, manufacturer = _wait_redfish(
                 self.BMC_IP, self.USERNAME, self.PASSWORD,
-                test, reset_start, REDFISH_TIMEOUT_SEC
+                test, reset_start, REDFISH_TIMEOUT_SEC, self.SYSTEM_ID
             )
             round_result["redfish_ok"]      = redfish_ok
             round_result["redfish_s"]        = redfish_elapsed

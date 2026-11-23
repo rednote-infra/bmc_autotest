@@ -299,6 +299,9 @@ class PhysicalDrivesInfoCheck(BmcTestBase):
         test.print_log("INFO", f"测试用例名称：{self.TEST_NAME}，测试用例编号：{self.TEST_NUM}")
         test.print_log("INFO", "测试开始")
 
+        if not self.prepare_system_client():
+            return
+
         check_result, drive_info_list = self.physical_drives_info_check()
         self.command_check_result = check_result
 

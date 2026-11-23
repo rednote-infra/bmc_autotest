@@ -77,7 +77,7 @@ class Managers007BmcReset(BmcTestBase):
                     username=self.USERNAME,
                     password=self.PASSWORD
                 )
-                manufacturer = client.get_manufacturer()
+                manufacturer = client.get_manufacturer(system_id=self.SYSTEM_ID)
                 client.close()
                 elapsed = int(time.time() - start_time)
                 test.print_log("INFO", f"Redfish 恢复，耗时 {elapsed}s，Manufacturer={manufacturer}")
@@ -128,6 +128,8 @@ class Managers007BmcReset(BmcTestBase):
                 username=self.USERNAME,
                 password=self.PASSWORD
             )
+            if not self.prepare_system_client():
+                return
             mgr = self.client.get_manager()
             pre_version = getattr(mgr, 'firmware_version', 'unknown')
             test.print_log("INFO", f"BMC 重启前 FirmwareVersion: {pre_version}")

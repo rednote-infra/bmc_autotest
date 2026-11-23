@@ -402,6 +402,8 @@ class PowerControlTest(BmcTestBase):
         test.print_log("INFO", "测试开始")
 
         self._init_client()
+        if not self.prepare_system_client():
+            return
         self._init_inband_ip()
 
         # 前置条件：确保开机

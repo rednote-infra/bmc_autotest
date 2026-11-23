@@ -101,12 +101,14 @@ class BmcStress001RedfishApiStress(BmcTestBase):
         parser.add_argument("-i", "--bmc_ip",    type=str)
         parser.add_argument("-u", "--user_name", type=str)
         parser.add_argument("-p", "--password",  type=str)
+        parser.add_argument("--system-id", type=str, default=None)
         parser.add_argument("--duration", type=int, default=None,
                             help=f"压测时长（秒，默认 {DEFAULT_DURATION_SEC}）")
         args, _ = parser.parse_known_args()
         self.BMC_IP   = args.bmc_ip
         self.USERNAME = args.user_name
         self.PASSWORD = args.password
+        self._cli_system_id = (args.system_id or "").strip() or None
         if args.duration is not None:
             self.DURATION = args.duration
 
@@ -161,6 +163,8 @@ class BmcStress001RedfishApiStress(BmcTestBase):
                 username=self.USERNAME,
                 password=self.PASSWORD,
             )
+            if not self.prepare_system_client():
+                return
             test.print_log("INFO", "BMC 连接成功，开始压测...")
 
             # 动态发现压测目标

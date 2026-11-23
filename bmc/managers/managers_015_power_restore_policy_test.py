@@ -136,6 +136,8 @@ class PowerRestorePolicyTest(BmcTestBase):
                 username=self.USERNAME,
                 password=self.PASSWORD
             )
+            if not self.prepare_system_client():
+                return
 
             # ── 1. 读取当前策略 ──────────────────────────────────────────────
             test.print_log("INFO", "=== 步骤1: 读取当前通电策略 ===")

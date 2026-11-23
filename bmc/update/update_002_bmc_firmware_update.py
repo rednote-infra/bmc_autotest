@@ -106,6 +106,8 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
         parser.add_argument("-i", "--bmc_ip",            type=str, help="BMC IP 地址")
         parser.add_argument("-u", "--user_name",         type=str, help="BMC 用户名")
         parser.add_argument("-p", "--password",          type=str, help="BMC 密码")
+        parser.add_argument("--system-id",               type=str, default=None,
+                            dest="system_id",             help="ComputerSystem Id or @odata.id")
         parser.add_argument("--image-uri",               type=str, default=None,
                             dest="image_uri",            help="新版本固件镜像 URI（HTTP/NFS/TFTP）")
         parser.add_argument("--default-image-uri",       type=str, default=None,
@@ -127,6 +129,7 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
         self.BMC_IP            = args.bmc_ip
         self.USERNAME          = args.user_name
         self.PASSWORD          = args.password
+        self._cli_system_id    = (args.system_id or "").strip() or None
         self.IMAGE_URI         = args.image_uri
         self.DEFAULT_IMAGE_URI = args.default_image_uri
         self.PROTOCOL          = args.protocol
@@ -260,7 +263,7 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
                     retry_on_read_timeout=True,
                     retry_5xx=1,
                 )
-                mfr = tmp.get_manufacturer()
+                mfr = tmp.get_manufacturer(system_id=self.SYSTEM_ID)
                 tmp.close()
                 if mfr:
                     redfish_ok = True
@@ -496,6 +499,8 @@ class Update002BmcFirmwareUpdate(BmcTestBase):
                 retry_on_read_timeout=True,
                 retry_5xx=1,
             )
+            if not self.prepare_system_client():
+                return
             # ── 动态解析厂商并应用配置段（client 已就绪，可动态探测）────────
             self._resolve_vendor_config(test)
 
