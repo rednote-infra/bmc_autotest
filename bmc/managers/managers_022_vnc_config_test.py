@@ -74,12 +74,19 @@ class Managers022VncConfigTest(BmcTestBase):
             # ── 1. 查询初始配置（SDK 1.3.0 类型化接口，URI 由 SDK 自动发现）──
             vnc_data = self.client.get_vnc_service()
             vnc_uri = vnc_data.odata_id
-            # SessionTimeoutMinutes/SessionMode 等为 OEM 扩展字段，经 extra 保留可属性访问
-            orig_timeout = getattr(vnc_data, "SessionTimeoutMinutes", None)
-            orig_mode    = getattr(vnc_data, "SessionMode", None)
-            ssl_enabled  = getattr(vnc_data, "SSLEncryptionEnabled", None)
-            max_sessions = getattr(vnc_data, "MaximumNumberOfSessions", None)
-            password_set = getattr(vnc_data, "Password", None)
+
+            # SDK 已将 OEM 字段类型化（蛇形名），PascalCase 仅作兜底
+            def _pick(snake, pascal=None):
+                val = getattr(vnc_data, snake, None)
+                if val is None and pascal:
+                    val = getattr(vnc_data, pascal, None)
+                return val
+
+            orig_timeout = _pick("session_timeout_minutes", "SessionTimeoutMinutes")
+            orig_mode    = _pick("session_mode", "SessionMode")
+            ssl_enabled  = _pick("ssl_encryption_enabled", "SSLEncryptionEnabled")
+            max_sessions = _pick("maximum_number_of_sessions", "MaximumNumberOfSessions")
+            password_set = _pick("password", "Password")
 
             test.print_log("INFO",
                 f"VNC 初始配置：SessionMode={orig_mode}, Timeout={orig_timeout}min, "
@@ -92,8 +99,13 @@ class Managers022VncConfigTest(BmcTestBase):
             }
 
             # 基础字段校验
-            checks.append(("SessionMode 字段合规",
-                            orig_mode in VALID_SESSION_MODES))
+            #   SessionMode 为 null 表示本机型未启用会话模式选择，计 SKIP（None）
+            if orig_mode is None:
+                test.print_log("INFO", "SessionMode: - SKIP 字段为 null（本机型未启用会话模式选择）")
+                checks.append(("SessionMode 字段合规", None))
+            else:
+                checks.append(("SessionMode 字段合规",
+                                orig_mode in VALID_SESSION_MODES))
             checks.append(("SessionTimeoutMinutes 为正整数",
                             isinstance(orig_timeout, int) and orig_timeout > 0))
             checks.append(("SSLEncryptionEnabled 为 bool",
@@ -102,13 +114,21 @@ class Managers022VncConfigTest(BmcTestBase):
                             isinstance(max_sessions, int) and max_sessions >= 1))
 
             # ── 2. 修改 SessionTimeoutMinutes ────────────────────────────
-            # 原值在 [1,55] 取 +5，否则取 -5，确保在合法范围 [1,60] 内
-            test_timeout = (orig_timeout + 5) if orig_timeout is not None and orig_timeout <= 55 else (orig_timeout - 5)
+            # 原值在 [1,55] 取 +5，否则取 -5，确保在合法范围 [1,60] 内；
+            # 原值为 None 时直接取 30。
+            if orig_timeout is None:
+                test_timeout = 30
+            elif orig_timeout <= 55:
+                test_timeout = orig_timeout + 5
+            else:
+                test_timeout = max(orig_timeout - 5, 1)
             patch_ok = self._patch_vnc(test, vnc_uri, {"SessionTimeoutMinutes": test_timeout}, "修改超时")
             if patch_ok:
                 time.sleep(2)
                 vnc_after = self.client.get_vnc_service()
-                actual_timeout = getattr(vnc_after, "SessionTimeoutMinutes", None)
+                actual_timeout = getattr(vnc_after, "session_timeout_minutes", None)
+                if actual_timeout is None:
+                    actual_timeout = getattr(vnc_after, "SessionTimeoutMinutes", None)
                 timeout_ok = actual_timeout == test_timeout
                 checks.append((f"SessionTimeoutMinutes PATCH 生效（期望={test_timeout}, 实际={actual_timeout}）",
                                 timeout_ok))
@@ -127,7 +147,9 @@ class Managers022VncConfigTest(BmcTestBase):
                 if patch_ok:
                     time.sleep(2)
                     vnc_after = self.client.get_vnc_service()
-                    actual_mode = getattr(vnc_after, "SessionMode", None)
+                    actual_mode = getattr(vnc_after, "session_mode", None)
+                    if actual_mode is None:
+                        actual_mode = getattr(vnc_after, "SessionMode", None)
                     mode_ok = actual_mode == test_mode
                     checks.append((f"SessionMode PATCH 生效（期望={test_mode}, 实际={actual_mode}）",
                                     mode_ok))
@@ -157,8 +179,14 @@ class Managers022VncConfigTest(BmcTestBase):
                     time.sleep(2)
                     try:
                         vnc_restored = self.client.get_vnc_service()
-                        t_ok = getattr(vnc_restored, "SessionTimeoutMinutes", None) == orig_timeout
-                        m_ok = getattr(vnc_restored, "SessionMode", None) == orig_mode
+                        t_restored = getattr(vnc_restored, "session_timeout_minutes", None)
+                        if t_restored is None:
+                            t_restored = getattr(vnc_restored, "SessionTimeoutMinutes", None)
+                        m_restored = getattr(vnc_restored, "session_mode", None)
+                        if m_restored is None:
+                            m_restored = getattr(vnc_restored, "SessionMode", None)
+                        t_ok = t_restored == orig_timeout
+                        m_ok = m_restored == orig_mode
                         restore_verified = t_ok and m_ok
                     except Exception:
                         restore_verified = False
@@ -175,12 +203,19 @@ class Managers022VncConfigTest(BmcTestBase):
             except Exception:
                 pass
 
-        final = "PASS" if checks and all(r for _, r in checks) else "FAIL"
+        # checks 中值为 None 表示 SKIP，不参与 PASS/FAIL 判定
+        final = "PASS" if checks and all(r for _, r in checks if r is not None) else "FAIL"
         for label, ok in checks:
-            test.print_log("INFO" if ok else "ERROR", f"{'✓' if ok else '✗'} {label}")
+            if ok is None:
+                test.print_log("INFO", f"- {label}（SKIP）")
+            else:
+                test.print_log("INFO" if ok else "ERROR", f"{'✓' if ok else '✗'} {label}")
         test.print_log("INFO" if final == "PASS" else "ERROR", f"测试结束，结果：{final}")
 
-        detail["checks"] = [{"label": l, "result": "PASS" if r else "FAIL"} for l, r in checks]
+        detail["checks"] = [
+            {"label": l, "result": "PASS" if r else ("SKIP" if r is None else "FAIL")}
+            for l, r in checks
+        ]
         test.add_key_value_to_json(self.result_json_path, "detail.cycle", value=detail)
         test.add_key_value_to_json(self.result_json_path, "summary",
                                    value={"metrics": self.TEST_NAME, "value": final})

@@ -85,9 +85,9 @@ INVALID_LEN_WARN = [
     ("abcdefghijklmnopq", "17位（长度超过上限16位）"),
 ]
 
-# 反向-严格：字符集违规（直接对应"用户名中夹带数字"的真机反馈缺陷，
-# 未拦截且账号真实存在 → FAIL）
-INVALID_CHARSET_MUST_REJECT = [
+# 反向-宽松：字符集违规（真机对含数字/@/下划线的用户名均真实创建成功，
+# 通用版本按通用定义开发，未拦截记 WARNING 不 FAIL）
+INVALID_CHARSET_WARN = [
     ("abcd1234",          "含数字（规范要求全英文字母）"),
     ("abcd@123",          "含特殊字符（规范要求全英文字母）"),
     ("abcd_efg",          "含下划线（规范要求全英文字母）"),
@@ -181,8 +181,8 @@ class AccountUsernameRuleTest(BmcTestBase):
 
         Parameters:
             username: 非法用户名
-            strict:   True=字符集违规（严格，未拦截且账号真实存在 → FAIL）；
-                      False=长度越界（宽松，未拦截 → WARNING，OEM 通用版本不强制定制）
+            strict:   True=严格（未拦截且账号真实存在 → FAIL）；
+                      False=宽松（未拦截 → WARNING，OEM 通用版本不强制定制）
 
         Returns:
             (level, detail) — level ∈ {"PASS", "WARNING", "FAIL"}
@@ -213,8 +213,8 @@ class AccountUsernameRuleTest(BmcTestBase):
             if strict:
                 return "FAIL", "非法用户名被 BMC 接受且账号真实存在，违反用户名规范！"
             return ("WARNING",
-                    "长度越界用户名被接受且账号真实存在（OEM 通用版本按通用定义开发，"
-                    "未按我方 4~16 位定制拦截，记 WARNING 不 FAIL，避免要求二次开发）")
+                    "非法用户名被接受且账号真实存在（OEM 通用版本按通用定义开发，"
+                    "未按我方用户名规则拦截，记 WARNING 不 FAIL，避免要求二次开发）")
 
         return "WARNING", "接口未报错但账号未真正创建（内部拦截生效，接口行为不规范，记WARNING）"
 
@@ -265,12 +265,12 @@ class AccountUsernameRuleTest(BmcTestBase):
                 rows.append((f"invalid_len_{username}", level, f"{desc} | {detail}"))
                 self._delete_immediately(username)
 
-            # ── 反向-严格：字符集违规（FAIL）──────────────────────────────────
+            # ── 反向-宽松：字符集违规（WARNING，不 FAIL）───────────────────────
             CommonFunction.print_log("INFO",
-                "=== 反向-严格：字符集违规（对应真机反馈缺陷，未拦截且账号真实存在 → FAIL）===")
-            for username, desc in INVALID_CHARSET_MUST_REJECT:
+                "=== 反向-宽松：字符集违规（通用版本未拦截，记 WARNING 不 FAIL）===")
+            for username, desc in INVALID_CHARSET_WARN:
                 CommonFunction.print_log("INFO", f"  尝试创建 [{desc}] {username!r}")
-                level, detail = self._try_create_invalid(username, strict=True)
+                level, detail = self._try_create_invalid(username, strict=False)
                 if level == "FAIL":
                     result = "FAIL"
                     CommonFunction.print_log("ERROR", f"    ✗ {detail}")

@@ -34,6 +34,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
 from func.sel_log_helper import find_sel_log_service
+from func.log_entry_helper import fetch_log_entries_sampled, describe_sampling
 
 from redfish_sdk import RedfishClient, RedfishException
 
@@ -48,7 +49,7 @@ class Managers004aSelLogCheck(BmcTestBase):
     - service_enabled == True
     - max_number_of_records > 0（边界：0 为异常）
     - overwrite_policy 非空（等价类：WrapsWhenFull / NeverOverwrites 均合法）
-    - Entries 集合可访问，get_manager_log_entries 返回列表（空列表也 PASS，代表无日志）
+    - Entries 集合可访问，有界采样读取成功（空列表也 PASS，代表无日志）
     """
 
     def __init__(self, case: str):
@@ -76,7 +77,9 @@ class Managers004aSelLogCheck(BmcTestBase):
             sel_svc, sel_source = find_sel_log_service(self.client, self.LOG_ID)
 
             svcs = self.client.get_manager_log_services()
-            target = next((s for s in svcs if getattr(s, 'id', '') == TARGET_LOG_ID), None)
+            # 直接用公共助手的匹配结果，不再按硬编码 id 精确查找：
+            # 设备实际可能叫 SELLog / SELEventLog，硬编码 "SEL" 会漏匹配。
+            target = sel_svc if sel_source == "Managers" else None
 
             # 存在性检查（边界）—— PASS 判定应是 Managers OR Systems 的关系，
             # Managers 侧找不到时，用公共助手的跨侧查找结果判断 SEL 是否在 Systems 侧，
@@ -126,15 +129,27 @@ class Managers004aSelLogCheck(BmcTestBase):
 
                 # Entries 可访问 + 合规性校验（空列表也 PASS）
                 # v1.1.1: 使用 Log.entries.odata_id 动态发现 Entries URL，不再硬编码路径
+                # 注意：必须用实际命中的 id（可能是 SELLog/SELEventLog），不能用 "SEL"
+                hit_id = getattr(target, 'id', None) or TARGET_LOG_ID
                 entries_url = target.entries.odata_id if target.entries else None
                 if not entries_url:
-                    test.print_log("ERROR", f"LogService '{TARGET_LOG_ID}' 无 Entries 链接")
+                    test.print_log("ERROR", f"LogService '{hit_id}' 无 Entries 链接")
                     checks.append(("Entries 集合可访问", False))
                 else:
                     test.print_log("INFO", f"动态发现 Entries URL: {entries_url}")
-                    # Use SDK get_manager_log_entries() to fetch expanded entries
-                    log_entries = self.client.get_manager_log_entries(TARGET_LOG_ID)
-                    entry_count = len(log_entries)
+                    # v1.4.0: 有界采样替代全量展开。
+                    # 历史实现 get_manager_log_entries() 会逐条 GET 展开全部条目，
+                    # 真机实测 SEL 519 条耗时 118 s；而校验只用前 10 条，
+                    # 98% 以上的 HTTP 往返被浪费（偶发触发 runner 120 s 强杀）。
+                    # 现改为读取集合首页（含 Members@odata.count + 内联成员）
+                    # 再补一页中段抽样，总数与合规性校验语义完全不变。
+                    sampling = fetch_log_entries_sampled(self.client, entries_url)
+                    test.print_log("INFO", describe_sampling(sampling))
+                    if sampling["error"]:
+                        test.print_log("ERROR", f"Entries 集合读取失败：{sampling['error']}")
+
+                    log_entries = sampling["entries"]
+                    entry_count = sampling["total"]
                     test.print_log("INFO", f"Entries 总数：{entry_count}")
 
                     ok = entry_count >= 0
@@ -159,6 +174,8 @@ class Managers004aSelLogCheck(BmcTestBase):
                         test.print_log("INFO", f"开始 DMTF 合规性校验（前 10 条），共 {entry_count} 条")
                         required_fail_count = 0
                         log_entries_info = []
+                        # 采样结果已按服务端顺序排列，前 10 条即最新条目，
+                        # 与历史实现 log_entries[:10] 的语义一致。
                         for j, entry in enumerate(log_entries[:10]):
                             entry_id = entry.id or f"entry_{j}"
                             if not entry.odata_id:

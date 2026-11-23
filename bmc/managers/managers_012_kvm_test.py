@@ -61,30 +61,65 @@ class Managers012KvmTest(BmcTestBase):
             # 1. 查询 KVM 服务配置（SDK 1.3.0 类型化接口，URI 由 SDK 自动发现）
             # KvmService 为 Pydantic 模型：须用 snake_case 属性访问（PascalCase 仅为 alias）
             kvm_data = self.client.get_kvm_service()
-            kvm_url = kvm_data.kvm_url or ""
-            max_sessions = kvm_data.maximum_number_of_sessions
-            active_sessions = kvm_data.number_of_activated_sessions
-            session_timeout = kvm_data.session_timeout_minutes
-            encryption_enabled = kvm_data.encryption_enabled
-            activated_type = kvm_data.activated_sessions_type or ""
 
-            test.print_log("INFO", f"KVM 配置: KvmUrl={kvm_url}, MaxSessions={max_sessions}, "
+            # SDK 已将字段类型化（蛇形名），PascalCase 仅作兜底
+            def _pick(obj, snake, pascal):
+                val = getattr(obj, snake, None)
+                return val if val is not None else getattr(obj, pascal, None)
+
+            max_sessions = _pick(kvm_data, "maximum_number_of_sessions",
+                                 "MaximumNumberOfSessions")
+            active_sessions = _pick(kvm_data, "number_of_activated_sessions",
+                                    "NumberOfActivatedSessions")
+            session_timeout = _pick(kvm_data, "session_timeout_minutes",
+                                    "SessionTimeoutMinutes")
+            encryption_enabled = _pick(kvm_data, "encryption_enabled",
+                                       "EncryptionEnabled")
+            activated_type = _pick(kvm_data, "activated_sessions_type",
+                                   "ActivatedSessionsType") or ""
+
+            # KvmUrl 属于可选的 OEM 字段，多数机型（含 xFusion iBMC）不下发。
+            # 因此改用标准 GraphicalConsole 判断 KVM over IP 能力。
+            kvm_url = _pick(kvm_data, "kvm_url", "KvmUrl") or ""
+            console_ok = False
+            console_types = []
+            try:
+                manager = self.client.get_manager("1")
+                gc = getattr(manager, "graphical_console", None) \
+                    or getattr(manager, "GraphicalConsole", None)
+                if gc is not None:
+                    console_types = getattr(gc, "connect_types_supported", None) \
+                        or getattr(gc, "ConnectTypesSupported", None) or []
+                    enabled = getattr(gc, "service_enabled", None)
+                    if enabled is None:
+                        enabled = getattr(gc, "ServiceEnabled", False)
+                    console_ok = bool(enabled)
+            except Exception as e:
+                test.print_log("WARNING", f"读取 GraphicalConsole 失败: {e}")
+
+            test.print_log("INFO", f"KVM 配置: MaxSessions={max_sessions}, "
                            f"ActiveSessions={active_sessions}, Timeout={session_timeout}min, "
-                           f"Encryption={encryption_enabled}, SessionType={activated_type}")
+                           f"Encryption={encryption_enabled}, SessionType={activated_type}, "
+                           f"KvmUrl={kvm_url or '(未下发)'}")
+            test.print_log("INFO", f"GraphicalConsole: ServiceEnabled={console_ok}, "
+                           f"ConnectTypesSupported={console_types}")
             kvm_info["initial"] = {
-                "KvmUrl": kvm_url,
                 "MaximumNumberOfSessions": max_sessions,
                 "NumberOfActivatedSessions": active_sessions,
                 "SessionTimeoutMinutes": session_timeout,
                 "EncryptionEnabled": encryption_enabled,
                 "ActivatedSessionsType": activated_type,
+                "KvmUrl": kvm_url,
+                "GraphicalConsoleEnabled": console_ok,
+                "ConnectTypesSupported": console_types,
             }
             checks.append(("查询 KVM 配置成功", True))
 
-            # 2. 验证 KvmUrl 格式合法
-            url_valid = bool(kvm_url) and "https" in kvm_url
-            test.print_log("INFO", f"KvmUrl 合法性: {url_valid} （{kvm_url}）")
-            checks.append(("KvmUrl 非空且包含 https", url_valid))
+            # 2. 验证 KVM over IP 能力（GraphicalConsole 启用且支持 KVMIP 连接类型）
+            kvm_capable = console_ok and "KVMIP" in (console_types or [])
+            test.print_log("INFO", f"KVM over IP 能力: {'✓' if kvm_capable else '✗'} "
+                           f"(enabled={console_ok}, types={console_types})")
+            checks.append(("GraphicalConsole 支持 KVMIP 连接", kvm_capable))
 
             # 3. 验证 MaximumNumberOfSessions 为正整数且 ≥ 2（业务要求支持 2 个及以上 KVM 会话）
             max_ok = isinstance(max_sessions, int) and max_sessions > 0
@@ -96,34 +131,55 @@ class Managers012KvmTest(BmcTestBase):
             checks.append(("MaximumNumberOfSessions ≥ 2（支持多会话）", max_ge2))
 
             # 4. 修改 SessionTimeoutMinutes 验证设置能力
+            #    注意：设备要求 If-Match（ETag），且恢复时不能把 None 写回（会 400）
             original_timeout = session_timeout
-            test.print_log("INFO", f"修改 SessionTimeoutMinutes: {original_timeout} → {TEST_SESSION_TIMEOUT}")
+            test.print_log("INFO",
+                f"修改 SessionTimeoutMinutes: {original_timeout} → {TEST_SESSION_TIMEOUT}")
+            patch_timeout = TEST_SESSION_TIMEOUT
+            if original_timeout == TEST_SESSION_TIMEOUT:
+                # 原值与目标值相同则改用另一个合法值，确保真的发生变更
+                patch_timeout = 120 if TEST_SESSION_TIMEOUT != 120 else 30
+                test.print_log("INFO",
+                    f"原值已等于 {TEST_SESSION_TIMEOUT}，改用 {patch_timeout} 验证写入能力")
             try:
-                self.client.patch(kvm_data.odata_id, {"SessionTimeoutMinutes": TEST_SESSION_TIMEOUT})
+                self.client.patch(kvm_data.odata_id,
+                                  {"SessionTimeoutMinutes": patch_timeout})
                 time.sleep(2)
                 kvm_data = self.client.get_kvm_service()
-                new_timeout = kvm_data.session_timeout_minutes
-                test.print_log("INFO", f"验证 SessionTimeoutMinutes={new_timeout}")
-                checks.append(("SessionTimeoutMinutes 设置验证", new_timeout == TEST_SESSION_TIMEOUT))
+                new_timeout = _pick(kvm_data, "session_timeout_minutes",
+                                    "SessionTimeoutMinutes")
+                test.print_log("INFO", f"验证 SessionTimeoutMinutes: "
+                               f"{'✓' if new_timeout == patch_timeout else '✗'} {new_timeout}")
+                checks.append(("SessionTimeoutMinutes 设置验证", new_timeout == patch_timeout))
                 kvm_info["after_patch"] = {"SessionTimeoutMinutes": new_timeout}
             except RedfishException as e:
                 test.print_log("WARNING", f"SessionTimeoutMinutes PATCH 失败: {str(e)}")
-                checks.append(("SessionTimeoutMinutes 设置验证", False))
+                checks.append(("SessionTimeoutMinutes 设置验证", None))
 
-            # 5. 恢复原始 Timeout
-            test.print_log("INFO", f"恢复原始 SessionTimeoutMinutes={original_timeout}...")
-            try:
-                self.client.patch(kvm_data.odata_id, {"SessionTimeoutMinutes": original_timeout})
-                time.sleep(1)
-                kvm_data = self.client.get_kvm_service()
-                restored = kvm_data.session_timeout_minutes
-                checks.append(("SessionTimeoutMinutes 恢复验证", restored == original_timeout))
-                kvm_info["after_restore"] = {"SessionTimeoutMinutes": restored}
-            except RedfishException as e:
-                test.print_log("WARNING", f"Timeout 恢复失败: {str(e)}")
-                checks.append(("SessionTimeoutMinutes 恢复验证", False))
+            # 5. 恢复原始 Timeout（仅当原值是有效整数时才回写）
+            if isinstance(original_timeout, int):
+                test.print_log("INFO", f"恢复原始 SessionTimeoutMinutes={original_timeout}...")
+                try:
+                    self.client.patch(kvm_data.odata_id,
+                                      {"SessionTimeoutMinutes": original_timeout})
+                    time.sleep(1)
+                    kvm_data = self.client.get_kvm_service()
+                    restored = _pick(kvm_data, "session_timeout_minutes",
+                                     "SessionTimeoutMinutes")
+                    test.print_log("INFO", f"恢复结果: "
+                                   f"{'✓' if restored == original_timeout else '✗'} {restored}")
+                    checks.append(("SessionTimeoutMinutes 恢复验证",
+                                   restored == original_timeout))
+                    kvm_info["after_restore"] = {"SessionTimeoutMinutes": restored}
+                except RedfishException as e:
+                    test.print_log("WARNING", f"Timeout 恢复失败: {str(e)}")
+                    checks.append(("SessionTimeoutMinutes 恢复验证", None))
+            else:
+                test.print_log("INFO", "原始 Timeout 非整数（未下发），跳过恢复")
+                checks.append(("SessionTimeoutMinutes 恢复验证", None))
 
-            final = "PASS" if all(r for _, r in checks) else "FAIL"
+            # checks 中值为 None 表示 SKIP，不参与 PASS/FAIL 判定
+            final = "PASS" if all(r for _, r in checks if r is not None) else "FAIL"
 
         except RedfishException as e:
             test.print_log("ERROR", f"Redfish SDK 调用失败：{str(e)}")

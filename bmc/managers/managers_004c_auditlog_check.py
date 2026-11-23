@@ -19,10 +19,14 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 
 from func.common_function import CommonFunction
 from func.bmc_test_base import BmcTestBase
+from func.log_entry_helper import fetch_log_entries_sampled, describe_sampling
 
 from redfish_sdk import RedfishClient, RedfishException
 
-TARGET_LOG_ID = "AuditLog"
+# 审计日志在不同厂商的命名不同：标准名是 AuditLog，xFusion/iBMC 实际提供
+# SecurityLog（内容为系统安全事件）。按优先级依次尝试，命中任一即算合规。
+TARGET_LOG_IDS = ("AuditLog", "SecurityLog", "OperateLog")
+TARGET_LOG_ID = TARGET_LOG_IDS[0]        # 兼容旧引用
 
 class Managers004cAuditLogCheck(BmcTestBase):
     """BMC 审计日志服务检查
@@ -33,7 +37,7 @@ class Managers004cAuditLogCheck(BmcTestBase):
     - service_enabled == True
     - max_number_of_records > 0（边界：0 为异常）
     - overwrite_policy 非空（等价类：WrapsWhenFull / NeverOverwrites 均合法）
-    - Entries 集合可访问，get_manager_log_entries 返回列表（空列表也 PASS，代表无日志）
+    - Entries 集合可访问，有界采样读取成功（空列表也 PASS，代表无日志）
     """
 
     def __init__(self, case: str):
@@ -56,14 +60,28 @@ class Managers004cAuditLogCheck(BmcTestBase):
             )
 
             svcs = self.client.get_manager_log_services()
-            target = next((s for s in svcs if getattr(s, 'id', '') == TARGET_LOG_ID), None)
+            available = [getattr(s, 'id', '') for s in svcs]
+
+            # 按优先级依次尝试各厂商命名（AuditLog -> SecurityLog -> OperateLog）
+            target, hit_id = None, None
+            for want in TARGET_LOG_IDS:
+                target = next((s for s in svcs if getattr(s, 'id', '') == want), None)
+                if target is not None:
+                    hit_id = want
+                    break
 
             # 存在性检查（边界）
             ok = target is not None
-            checks.append((f"LogService '{TARGET_LOG_ID}' 存在", ok))
+            label = f"LogService '{TARGET_LOG_IDS[0]}' 存在"
+            if ok and hit_id != TARGET_LOG_IDS[0]:
+                label = f"LogService '{TARGET_LOG_IDS[0]}' 存在（本机型命名 '{hit_id}'）"
+            checks.append((label, ok))
             if not ok:
-                test.print_log("ERROR", f"未找到 LogService id='{TARGET_LOG_ID}'，已有：{[getattr(s,'id','') for s in svcs]}")
+                test.print_log(
+                    "ERROR",
+                    f"未找到任一审计日志服务 {list(TARGET_LOG_IDS)}，已有：{available}")
             else:
+                test.print_log("INFO", f"命中审计日志服务：{hit_id}")
                 # service_enabled
                 enabled = getattr(target, 'service_enabled', None)
                 test.print_log("INFO", f"service_enabled: {enabled}")
@@ -92,13 +110,22 @@ class Managers004cAuditLogCheck(BmcTestBase):
                 # v1.1.1: 使用 Log.entries.odata_id 动态发现 Entries URL，不再硬编码路径
                 entries_url = target.entries.odata_id if target.entries else None
                 if not entries_url:
-                    test.print_log("ERROR", f"LogService '{TARGET_LOG_ID}' 无 Entries 链接")
+                    test.print_log("ERROR", f"LogService '{hit_id}' 无 Entries 链接")
                     checks.append(("Entries 集合可访问", False))
                 else:
                     test.print_log("INFO", f"动态发现 Entries URL: {entries_url}")
-                    # Use SDK get_manager_log_entries() to fetch expanded entries
-                    log_entries = self.client.get_manager_log_entries(TARGET_LOG_ID)
-                    entry_count = len(log_entries)
+                    # v1.4.0: 有界采样替代全量展开。
+                    # 历史实现 get_manager_log_entries() 逐条 GET 全部条目，
+                    # 真机实测 SecurityLog 1415 条需 249 s（超过 runner 的
+                    # 120 s 硬超时）。校验只需前 10 条，故改为读集合首页
+                    # （Members@odata.count + 内联成员）再补一页中段抽样。
+                    sampling = fetch_log_entries_sampled(self.client, entries_url)
+                    test.print_log("INFO", describe_sampling(sampling))
+                    if sampling["error"]:
+                        test.print_log("ERROR", f"Entries 集合读取失败：{sampling['error']}")
+
+                    log_entries = sampling["entries"]
+                    entry_count = sampling["total"]
                     test.print_log("INFO", f"Entries 总数：{entry_count}")
 
                     ok = entry_count >= 0

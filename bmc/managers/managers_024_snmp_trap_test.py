@@ -60,38 +60,52 @@ class Managers024SnmpTrapTest(BmcTestBase):
 
             # ── 1. 查询 SNMP 服务配置（SDK 1.3.0 类型化接口，URI 由 SDK 自动发现）──
             snmp_data = self.client.get_snmp_service()
-            # SnmpServiceEnable/SnmpServicePort 为 OEM 扩展字段，经 extra 保留可属性访问
-            svc_enabled  = getattr(snmp_data, "SnmpServiceEnable", None)
-            svc_port     = getattr(snmp_data, "SnmpServicePort", None)
             trap_notify  = snmp_data.snmp_trap_notification
-            trap_enabled = getattr(trap_notify, "snmpTrapEnable", None) if trap_notify else None
+            # TrapNotification.ServiceEnabled 为真正的 Trap 使能开关（OEM 字段）
+            trap_enabled = getattr(trap_notify, "service_enabled", None) if trap_notify else None
             trap_servers = (trap_notify.trap_server if trap_notify else None) or []
             trap_version = trap_notify.trap_version if trap_notify else None
 
+            # 标准 SNMP 服务开关/端口位于 ManagerNetworkProtocol.SNMP
+            svc_enabled = None
+            svc_port = None
+            try:
+                net_proto = self.client.get_network_protocol()
+                std_snmp = getattr(net_proto, "snmp", None) \
+                    or getattr(net_proto, "SNMP", None)
+                if std_snmp is not None:
+                    svc_enabled = getattr(std_snmp, "protocol_enabled", None)
+                    svc_port = getattr(std_snmp, "port", None)
+            except RedfishException as e:
+                test.print_log("WARNING", f"读取 NetworkProtocol.SNMP 失败: {e}")
+
             test.print_log("INFO",
-                f"SNMP 配置：ServiceEnabled={svc_enabled}, Port={svc_port}, "
-                f"TrapEnabled={trap_enabled}, TrapVersion={trap_version}, "
+                f"SNMP 配置：ProtocolEnabled={svc_enabled}, Port={svc_port}, "
+                f"TrapServiceEnabled={trap_enabled}, TrapVersion={trap_version}, "
                 f"TrapServers 数量={len(trap_servers) if isinstance(trap_servers, list) else 'N/A'}")
 
             detail["initial"] = {
-                "SnmpServiceEnable": svc_enabled,
-                "SnmpServicePort":   svc_port,
-                "TrapEnabled":       trap_enabled,
-                "TrapVersion":       trap_version,
-                "TrapServerCount":   len(trap_servers) if isinstance(trap_servers, list) else 0,
+                "SNMP.ProtocolEnabled": svc_enabled,
+                "SNMP.Port":            svc_port,
+                "TrapNotification.ServiceEnabled": trap_enabled,
+                "TrapVersion":          trap_version,
+                "TrapServerCount":      len(trap_servers) if isinstance(trap_servers, list) else 0,
             }
 
             checks.append(("SNMP 服务查询成功", True))
-            checks.append(("SnmpServiceEnable 字段存在", svc_enabled is not None))
+            # 使用设备真实字段：NetworkProtocol.SNMP.ProtocolEnabled
+            checks.append(("SNMP.ProtocolEnabled 字段存在", svc_enabled is not None))
             checks.append(("SnmpTrapNotification 结构存在", trap_notify is not None))
+            checks.append(("TrapNotification.ServiceEnabled 字段存在", trap_enabled is not None))
 
             # ── 2. 触发 Trap 测试告警 ─────────────────────────────────────
-            # TrapServerAddress 为 OEM 字段（SDK TrapServer 模型为 Destination），经 extra 保留
+            # TrapServer 地址字段：SDK 已类型化，destination_address / destination 双兼容
             active_servers = []
             if isinstance(trap_servers, list):
                 active_servers = [
                     s for s in trap_servers
-                    if getattr(s, "TrapServerAddress", "") or (s.destination or "")
+                    if (getattr(s, "destination_address", None)
+                        or getattr(s, "destination", None) or "")
                 ]
 
             if not active_servers:

@@ -110,6 +110,10 @@ class WebHardwareInfo(BmcWebTestBase):
             missing = [f for f in req_fields if f not in body or body[f] is None]
             ok = len(missing) == 0
             detail = f'HTTP=200, missing={missing}' if missing else f'HTTP=200, fields={req_fields} ✓'
+            if optional and missing:
+                CommonFunction.print_log('WARNING', f'[{name}] WARNING: {detail}')
+                steps.append((name, 'WARNING', detail))
+                continue
             all_pass = self._rec(steps, all_pass, name, ok, detail)
 
         client.logout()

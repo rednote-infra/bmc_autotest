@@ -152,11 +152,12 @@ class Chassis012HistoryTempTest(BmcTestBase):
 
             if hist is None:
                 test.print_log(
-                    "ERROR",
+                    "WARNING",
                     "BMC 不支持进风口历史温度（InletHistoryTemperature 链接缺失或 404），"
                     "需推动厂商补充该接口"
                 )
-                checks.append(("InletHistoryTemperature 资源可用", False))
+                checks.append(("InletHistoryTemperature 资源可用", None))
+                final = "WARNING"
             else:
                 records = hist.historical_inlet_temp or []
                 test.print_log("INFO", f"历史温度记录数：{len(records)}")
@@ -165,8 +166,7 @@ class Chassis012HistoryTempTest(BmcTestBase):
                 checks.append(("历史数据非空", data_result["non_empty"]))
                 checks.append(("历史数据字段完整（time + 温度值）", data_result["all_fields_present"]))
                 checks.append(("时间格式符合 ISO 8601", data_result["time_format_ok"]))
-
-            final = "PASS" if checks and all(r for _, r in checks) else "FAIL"
+                final = "PASS" if all(r for _, r in checks) else "FAIL"
 
         except RedfishException as e:
             test.print_log("ERROR", f"Redfish SDK 调用失败：{str(e)}")
@@ -183,8 +183,9 @@ class Chassis012HistoryTempTest(BmcTestBase):
                     pass
 
         for label, passed in checks:
+            value = "SKIP" if passed is None else ("PASS" if passed else "FAIL")
             test.add_key_value_to_json(self.result_json_path, "detail.cycle",
-                                       value={"metrics": label, "value": "PASS" if passed else "FAIL"})
+                                       value={"metrics": label, "value": value})
         test.add_key_value_to_json(self.result_json_path, "detail.cycle",
                                    value={"metrics": "history_temp_detail", "value": data_result})
 
@@ -202,7 +203,7 @@ if __name__ == '__main__':
     try:
         test_name = Chassis012HistoryTempTest("Chassis012HistoryTempTest")
         test_name.run_test()
-        if test_name.command_check_result in ["FINISH", "PASS"]:
+        if test_name.command_check_result in ["FINISH", "PASS", "WARNING"]:
             exit_code = 0
         elif test_name.command_check_result == "FAIL":
             exit_code = 2

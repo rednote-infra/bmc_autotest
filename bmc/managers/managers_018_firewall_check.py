@@ -53,33 +53,89 @@ class Managers018FirewallCheck(BmcTestBase):
                 password=self.PASSWORD
             )
 
-            # 1. GET FirewallRules 接口（SDK 1.3.0 类型化接口，URI 由 SDK 自动发现）
-            test.print_log("INFO", "=== 步骤1: 查询 FirewallRules 配置 ===")
-            fw_data = self.client.get_firewall_rules()
-            test.print_log("INFO", "FirewallRules 接口查询成功")
-            checks.append(("FirewallRules 接口查询成功", True))
+            # 1. 查询防火墙配置
+            #    OEM 机型可能提供 /Managers/1/FirewallRules（ActiveStrategy + Rules），
+            #    但标准 Redfish 无该资源。缺失时回退到"网络协议端口暴露"等价检查：
+            #    NetworkProtocol 下各协议的 ProtocolEnabled / Port 即实际暴露面。
+            test.print_log("INFO", "=== 步骤1: 查询防火墙配置 ===")
+            fw_data = None
+            try:
+                fw_data = self.client.get_firewall_rules()
+                test.print_log("INFO", "FirewallRules 接口查询成功（OEM 资源）")
+                checks.append(("FirewallRules 接口查询成功", True))
+            except RedfishException as e:
+                test.print_log("INFO", f"未提供 OEM FirewallRules 资源（{e}），"
+                                       f"回退到网络协议暴露面检查")
 
-            # 2. ActiveStrategy 存在且在 ["Accept", "Drop"] 中（OEM 扩展字段，经 extra 保留可属性访问）
-            active_strategy = getattr(fw_data, "ActiveStrategy", None)
-            strategy_ok = active_strategy in VALID_STRATEGIES
-            test.print_log("INFO",
-                f"ActiveStrategy: {'✓' if strategy_ok else '✗'} {active_strategy!r} "
-                f"（期望：{VALID_STRATEGIES}）")
-            checks.append(("ActiveStrategy 存在且在有效枚举中", strategy_ok))
+            active_strategy = None
+            rules = None
+            rules_count = 0
 
-            # 3. Rules 存在（list，可为空，OEM 扩展字段）
-            rules = getattr(fw_data, "Rules", None)
-            rules_ok = isinstance(rules, list)
-            rules_count = len(rules) if rules_ok else 0
-            test.print_log("INFO",
-                f"Rules: {'✓ 存在（list）' if rules_ok else '✗ 缺失或类型不对'} "
-                f"（数量：{rules_count}）")
-            checks.append(("Rules 存在（list）", rules_ok))
+            if fw_data is not None:
+                # 2. ActiveStrategy 存在且在 ["Accept", "Drop"] 中
+                active_strategy = getattr(fw_data, "active_strategy", None) \
+                    or getattr(fw_data, "ActiveStrategy", None)
+                strategy_ok = active_strategy in VALID_STRATEGIES
+                test.print_log("INFO",
+                    f"ActiveStrategy: {'✓' if strategy_ok else '✗'} {active_strategy!r} "
+                    f"（期望：{VALID_STRATEGIES}）")
+                checks.append(("ActiveStrategy 存在且在有效枚举中", strategy_ok))
+
+                # 3. Rules 存在（list，可为空）
+                rules = getattr(fw_data, "rules", None) \
+                    or getattr(fw_data, "Rules", None)
+                rules_ok = isinstance(rules, list)
+                rules_count = len(rules) if rules_ok else 0
+                test.print_log("INFO",
+                    f"Rules: {'✓ 存在（list）' if rules_ok else '✗ 缺失或类型不对'} "
+                    f"（数量：{rules_count}）")
+                checks.append(("Rules 存在（list）", rules_ok))
+            else:
+                # ── 标准字段回退路径 ──
+                np_data = self.client.get_network_protocol()
+                # 枚举所有"带 ProtocolEnabled 字段"的协议块，即当前端口暴露面
+                proto_state = {}
+                for name in ("http", "https", "ssh", "ipmi", "kvmip", "sftp",
+                             "snmp", "ssdp", "virtual_media"):
+                    blk = getattr(np_data, name, None)
+                    if blk is None:
+                        continue
+                    enabled = getattr(blk, "protocol_enabled", None)
+                    port = getattr(blk, "port", None)
+                    proto_state[name.upper()] = {"ProtocolEnabled": enabled, "Port": port}
+
+                enabled_count = sum(1 for v in proto_state.values()
+                                    if v.get("ProtocolEnabled") is True)
+                firewall_info["ProtocolExposure"] = proto_state
+                test.print_log("INFO", f"NetworkProtocol 暴露面（共 {len(proto_state)} 项，"
+                                       f"已启用 {enabled_count} 项）：")
+                for name, st in proto_state.items():
+                    test.print_log("INFO", f"  {name}: Enabled={st['ProtocolEnabled']}, "
+                                           f"Port={st['Port']}")
+
+                # 2'. 至少能枚举出协议块，说明暴露面信息可读
+                exposure_ok = len(proto_state) > 0
+                checks.append(("网络协议暴露面可枚举", exposure_ok))
+
+                # 3'. 所有已启用协议端口必须合法（1-65535），等价于防火墙规则合法性
+                ports_valid = True
+                for name, st in proto_state.items():
+                    if st.get("ProtocolEnabled") is True:
+                        port = st.get("Port")
+                        if not (isinstance(port, int) and 1 <= port <= 65535):
+                            ports_valid = False
+                            test.print_log("ERROR",
+                                f"  {name} 已启用但端口非法：{port!r}")
+                test.print_log("INFO",
+                    f"已启用协议端口合法性: {'✓' if ports_valid else '✗'}")
+                checks.append(("已启用协议端口均合法", ports_valid))
 
             # 记录详细信息
-            firewall_info["ActiveStrategy"] = active_strategy
+            if active_strategy is not None:
+                firewall_info["ActiveStrategy"] = active_strategy
             firewall_info["RulesCount"] = rules_count
-            firewall_info["Rules"] = rules
+            if fw_data is not None:
+                firewall_info["Rules"] = rules
 
             final = "PASS" if all(r for _, r in checks) else "FAIL"
 

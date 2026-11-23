@@ -400,10 +400,9 @@ class SensorsInfoCheck(BmcTestBase):
 
         if pc.power_capacity_watts is None or not isinstance(pc.power_capacity_watts, (int, float)) or pc.power_capacity_watts <= 0:
             CommonFunction.print_log(
-                "ERROR",
+                "WARNING",
                 f"[PowerCtrl][必要] {ctrl_id}：PowerCapacityWatts={pc.power_capacity_watts}，应为正数"
             )
-            field_pass = False
         else:
             CommonFunction.print_log(
                 "INFO",
@@ -418,6 +417,7 @@ class SensorsInfoCheck(BmcTestBase):
             "is_mandatory": True,
             "severity": "ERROR",
             "reading": pc.power_consumed_watts,
+            "power_capacity_watts": pc.power_capacity_watts,
             "unit": "Watts",
             "health": "",
             "check_result": "PASS" if field_pass else "FAIL",

@@ -53,40 +53,117 @@ class Managers021SolCheck(BmcTestBase):
                 password=self.PASSWORD
             )
 
-            # 1. GET SOLSourceControlInfo 接口（SDK 1.3.0 类型化接口，URI 由 SDK 自动发现）
-            test.print_log("INFO", "=== 步骤1: 查询 SOLSourceControlInfo 配置 ===")
-            sol_data = self.client.get_sol_source()
-            test.print_log("INFO", "SOLSourceControlInfo 接口查询成功")
-            checks.append(("SOLSourceControlInfo 接口查询成功", True))
+            # 1. 查询 SOL 配置
+            #    OEM 机型可能提供 /Managers/1/SOLSourceControlInfo（SerialSource +
+            #    Parameters.AllowableValues），但标准 Redfish 无该资源。
+            #    缺失时回退到标准 SOL 能力描述：
+            #      Manager.SerialConsole（ServiceEnabled / ConnectTypesSupported / MaxConcurrentSessions）
+            #      SerialInterfaces 集合（串口参数）
+            test.print_log("INFO", "=== 步骤1: 查询 SOL 配置 ===")
+            sol_data = None
+            try:
+                sol_data = self.client.get_sol_source()
+                test.print_log("INFO", "SOLSourceControlInfo 接口查询成功（OEM 资源）")
+                checks.append(("SOLSourceControlInfo 接口查询成功", True))
+            except RedfishException as e:
+                test.print_log("INFO", f"未提供 OEM SOLSourceControlInfo 资源（{e}），"
+                                       f"回退到标准 SerialConsole / SerialInterfaces 检查")
 
-            # 2. SerialSource 存在且非空（OEM 扩展字段，经 extra 保留可属性访问）
-            serial_source = getattr(sol_data, "SerialSource", None)
-            serial_source_ok = isinstance(serial_source, str) and len(serial_source.strip()) > 0
-            test.print_log("INFO",
-                f"SerialSource: {'✓' if serial_source_ok else '✗'} {serial_source!r}")
-            checks.append(("SerialSource 存在且非空", serial_source_ok))
-
-            # 3. Parameters 存在（OEM 扩展字段）
-            parameters = getattr(sol_data, "Parameters", None)
-            params_ok = isinstance(parameters, dict)
-            test.print_log("INFO",
-                f"Parameters: {'✓ 存在且为 dict' if params_ok else '✗ 缺失或类型不对'}")
-            checks.append(("Parameters 存在", params_ok))
-
-            # 4. Parameters.AllowableValues 存在且为非空 list
+            serial_source = None
+            parameters = None
             allowable_values = None
-            allowable_ok = False
-            if params_ok:
-                allowable_values = parameters.get("AllowableValues")
-                allowable_ok = isinstance(allowable_values, list) and len(allowable_values) > 0
-            test.print_log("INFO",
-                f"Parameters.AllowableValues: {'✓ 非空 list' if allowable_ok else '✗ 缺失/空/类型不对'} "
-                f"（值：{allowable_values!r}）")
-            checks.append(("Parameters.AllowableValues 存在且为非空 list", allowable_ok))
+
+            if sol_data is not None:
+                # 2. SerialSource 存在且非空
+                serial_source = getattr(sol_data, "serial_source", None) \
+                    or getattr(sol_data, "SerialSource", None)
+                serial_source_ok = isinstance(serial_source, str) \
+                    and len(serial_source.strip()) > 0
+                test.print_log("INFO",
+                    f"SerialSource: {'✓' if serial_source_ok else '✗'} {serial_source!r}")
+                checks.append(("SerialSource 存在且非空", serial_source_ok))
+
+                # 3. Parameters 存在
+                parameters = getattr(sol_data, "parameters", None) \
+                    or getattr(sol_data, "Parameters", None)
+                params_ok = isinstance(parameters, dict)
+                test.print_log("INFO",
+                    f"Parameters: {'✓ 存在且为 dict' if params_ok else '✗ 缺失或类型不对'}")
+                checks.append(("Parameters 存在", params_ok))
+
+                # 4. Parameters.AllowableValues 存在且为非空 list
+                if params_ok:
+                    allowable_values = parameters.get("AllowableValues")
+                allowable_ok = isinstance(allowable_values, list) \
+                    and len(allowable_values) > 0
+                test.print_log("INFO",
+                    f"Parameters.AllowableValues: "
+                    f"{'✓ 非空 list' if allowable_ok else '✗ 缺失/空/类型不对'} "
+                    f"（值：{allowable_values!r}）")
+                checks.append(("Parameters.AllowableValues 存在且为非空 list", allowable_ok))
+            else:
+                # ── 标准字段回退路径 ──
+                # 2'. Manager.SerialConsole 描述 SOL 能力
+                manager = self.client.get_manager("1")
+                serial_console = getattr(manager, "serial_console", None) \
+                    or getattr(manager, "SerialConsole", None)
+                sol_enabled = False
+                connect_types = []
+                max_sessions = None
+                if serial_console is not None:
+                    sol_enabled = getattr(serial_console, "service_enabled", None)
+                    if sol_enabled is None:
+                        sol_enabled = getattr(serial_console, "ServiceEnabled", False)
+                    connect_types = getattr(serial_console, "connect_types_supported", None) \
+                        or getattr(serial_console, "ConnectTypesSupported", None) or []
+                    max_sessions = getattr(serial_console, "max_concurrent_sessions", None)
+                    if max_sessions is None:
+                        max_sessions = getattr(serial_console,
+                                               "MaxConcurrentSessions", None)
+                serial_source = "SerialConsole"
+                test.print_log("INFO",
+                    f"Manager.SerialConsole: ServiceEnabled={sol_enabled}, "
+                    f"ConnectTypesSupported={connect_types}, "
+                    f"MaxConcurrentSessions={max_sessions}")
+                checks.append(("Manager.SerialConsole 存在", serial_console is not None))
+                checks.append(("SerialConsole.ServiceEnabled 为 true",
+                               sol_enabled is True))
+
+                # 3'. 串口参数：SerialInterfaces 集合（第一个成员为 BMC 串口）
+                ifaces = self.client.get_serial_interfaces()
+                iface_detail = []
+                for itf in ifaces or []:
+                    iface_detail.append({
+                        "Id": getattr(itf, "id", ""),
+                        "InterfaceEnabled": getattr(itf, "interface_enabled", None),
+                        "BitRate": getattr(itf, "bit_rate", None),
+                        "Parity": getattr(itf, "parity", None),
+                        "DataBits": getattr(itf, "data_bits", None),
+                        "StopBits": getattr(itf, "stop_bits", None),
+                        "ConnectorType": getattr(itf, "connector_type", None),
+                    })
+                parameters = {"Interfaces": iface_detail}
+                test.print_log("INFO", f"SerialInterfaces 数量={len(iface_detail)}:")
+                for d in iface_detail:
+                    test.print_log("INFO", f"  {d['Id']}: Enabled={d['InterfaceEnabled']}, "
+                                           f"{d['DataBits']}{d['Parity'][:1] if d['Parity'] else '?'}"
+                                           f"{d['StopBits']} @ {d['BitRate']}, "
+                                           f"Connector={d['ConnectorType']}")
+                checks.append(("SerialInterfaces 集合非空", len(iface_detail) > 0))
+
+                # 4'. 至少有一个串口处于使能状态（SOL 可用前提）
+                any_enabled = any(d.get("InterfaceEnabled") is True for d in iface_detail)
+                test.print_log("INFO",
+                    f"存在已使能串口: {'✓' if any_enabled else '✗'}")
+                checks.append(("存在已使能的串口", any_enabled))
+
+                # AllowableValues 等价信息：串口可用的连接能力
+                allowable_values = connect_types or None
 
             # 记录详细信息
             sol_info["SerialSource"] = serial_source
             sol_info["AllowableValues"] = allowable_values
+            sol_info["Parameters"] = parameters
 
             final = "PASS" if all(r for _, r in checks) else "FAIL"
 

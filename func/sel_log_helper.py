@@ -29,6 +29,12 @@ from func.common_function import CommonFunction
 
 # 严格匹配：SEL 必须是独立大写词（避免 "console"/"dismiss"/"self" 等子串误命中）。
 _SEL_UPPER_RE = re.compile(r"\bSEL\b")
+# Id 精确形态：SEL / SELLog / SELEventLog（xFusion 实际用 "SELLog"）
+# 注意：\bSEL\b 匹配不到 "SELLog" —— "SEL" 后紧跟 "L" 均为 \w，不构成词边界，
+# 这正是真机上 SEL 服务存在却被判缺失的原因。
+_SEL_ID_EXACT_RE = re.compile(r"^SEL(Log|EventLog)?$", re.IGNORECASE)
+# Id 前缀形态：SEL_xxx / SEL-xxx
+_SEL_ID_PREFIX_RE = re.compile(r"^SEL[_-]", re.IGNORECASE)
 # 其他厂商命名（小写关键字，作为补充）。
 # 注意：只保留明确等价于 "System Event Log" 的写法，**不要**加 "event log"/
 # "eventlog"——很多 BMC 把 SEL 与独立的 "EventLog" 服务并列存在，过宽的
@@ -46,17 +52,24 @@ def _match_log_id(svc, log_id: str) -> bool:
 def _is_sel_log_service(log_svc) -> bool:
     """按 Id/Name 判断是否为 SEL 日志服务。
 
-    - SEL 严格：``id`` 全等于 "SEL"，或 name/id 含独立大写词 "SEL"
-      （大小写敏感，避免子串误命中 console/dismiss/self 之类）。
+    - Id 形态匹配（最可靠）：SEL / SELLog / SELEventLog / SEL_xxx。
+      用正则白名单而非子串匹配，避免 "Self"/"SelfTest" 被误命中。
+    - 独立大写词匹配：name 或 id 含 ``\\bSEL\\b``（如 "System SEL"）。
     - 其他厂商命名（如 System Event Log）按小写关键字补充匹配；
       注意**不包含**独立的 "EventLog" 服务（避免与 SEL 并列存在时误判）。
     """
     svc_id = log_svc.id or ""
     name = log_svc.name or ""
-    if svc_id == "SEL":
+
+    # 1) Id 精确/前缀形态 —— 覆盖 xFusion 的 "SELLog"
+    if _SEL_ID_EXACT_RE.match(svc_id) or _SEL_ID_PREFIX_RE.match(svc_id):
         return True
+
+    # 2) 独立大写词
     if _SEL_UPPER_RE.search(name) or _SEL_UPPER_RE.search(svc_id):
         return True
+
+    # 3) 其他厂商命名
     low_name = name.lower()
     low_id = svc_id.lower()
     return any(hint in low_name or hint in low_id for hint in SEL_NAME_HINTS)

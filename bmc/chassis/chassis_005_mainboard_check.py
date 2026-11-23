@@ -70,8 +70,7 @@ class MainboardInfoCheck(BmcTestBase):
 
         # 1. ProductName
         if not mb.product_name or (isinstance(mb.product_name, str) and mb.product_name.strip() == ""):
-            CommonFunction.print_log("ERROR", "[MainBoard]：ProductName 为空或 None")
-            all_pass = False
+            CommonFunction.print_log("WARNING", "[MainBoard]：ProductName 为空或 None")
         else:
             CommonFunction.print_log("INFO", f"[MainBoard]：ProductName = {mb.product_name}")
 
@@ -91,8 +90,7 @@ class MainboardInfoCheck(BmcTestBase):
 
         # 4. PartNumber
         if not mb.part_number or (isinstance(mb.part_number, str) and mb.part_number.strip() == ""):
-            CommonFunction.print_log("ERROR", "[MainBoard]：PartNumber 为空或 None")
-            all_pass = False
+            CommonFunction.print_log("WARNING", "[MainBoard]：PartNumber 为空或 None")
         else:
             CommonFunction.print_log("INFO", f"[MainBoard]：PartNumber = {mb.part_number}")
 

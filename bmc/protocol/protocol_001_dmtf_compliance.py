@@ -19,11 +19,11 @@ Usage: python3 bmc/protocol_001_dmtf_compliance.py -i <bmc_ip> -u <username> -p 
 
 覆盖检查项（共 8 大类 30+ 项）：
   1. Redfish Version      — 根节点可访问、RedfishVersion 字段合规
-  2. ETags                — @odata.etag 可获取、不带 If-Match PATCH 返回 428
+  2. ETags                — @odata.etag 可获取、不带 If-Match PATCH 返回 412 或 428
                            （测试资源：/Chassis/1 UID点灯、/Systems/1 BootOrder）
   3. HTTP Method 合规     — GET/POST/PATCH/DELETE 各自幂等性及支持情况
   4. HTTP Header 合规     — Content-Type、Authorization 校验、If-Match 响应
-  5. HTTP StatusCode 合规 — 各场景状态码正确（200/201/204/400/401/403/404/405/428 等）
+  5. HTTP StatusCode 合规 — 各场景状态码正确（200/201/204/400/401/403/404/405/412/428 等）
   6. HTTP Request 合规    — PATCH 空 JSON（2xx/4xx 均可）、Boot 只传 Boot 属性
   7. HTTP Response 合规   — Action 204+空/200+error、400/500 必须有 error response 结构
   8. 通用 DMTF 补充       — OData-Version header、必填 @odata 字段、Allow/Location header
@@ -39,6 +39,7 @@ import os
 import base64
 import sys
 import ssl
+import datetime
 import traceback
 import urllib.error
 import urllib.parse
@@ -248,7 +249,10 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
                           if isinstance(p, dict) and p.get("Name")}
 
         required = {name for name, p in parameters.items() if p.get("Required")}
-        unsupported = required - {"MessageId", "MessageArgs", "EventType"}
+        unsupported = required - {
+            "MessageId", "MessageArgs", "EventType", "EventId", "EventTimestamp",
+            "Message", "Severity", "OriginOfCondition",
+        }
         if unsupported:
             raise ValueError(f"无法自动构造必填参数：{sorted(unsupported)}")
 
@@ -271,6 +275,23 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
                 raise ValueError("设备未声明可用的 MessageId 或 EventType 参数")
             body["EventType"] = ("StatusChange" if not allowable or "StatusChange" in allowable
                                  else allowable[0])
+
+        if "EventId" in parameters:
+            body["EventId"] = "dmtf-compliance-%s" % datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+
+        if "EventTimestamp" in parameters:
+            body["EventTimestamp"] = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+
+        if "Message" in parameters:
+            body["Message"] = "Redfish protocol compliance test event"
+
+        if "Severity" in parameters:
+            allowable = parameters.get("Severity", {}).get("AllowableValues") or ["OK"]
+            body["Severity"] = "OK" if "OK" in allowable else allowable[0]
+
+        if "OriginOfCondition" in parameters:
+            body["OriginOfCondition"] = {"@odata.id": self.chassis_uri}
+
         return body
 
     # ─────────────────────────────────────────────────────
@@ -286,6 +307,12 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
             else:
                 etag = hdrs.get("etag") or ""
         return str(etag).strip()
+
+    def _noop_patch_body(self, uri: str, token: str) -> dict:
+        sc, body, _ = self._request("GET", uri, token=token)
+        if sc == 200 and isinstance(body, dict) and "AssetTag" in body:
+            return {"AssetTag": body.get("AssetTag")}
+        return {}
 
     # ─────────────────────────────────────────────────────
     # 检查结果记录
@@ -362,16 +389,18 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
             self._record(f"GET {label} 返回 @odata.etag", LEVEL_ERROR,
                          bool(etag), f"HTTP {sc}, etag={etag!r}")
 
-            # 2-2 不带 If-Match 直接 PATCH → 期望 428
+            # 2-2 不带 If-Match 直接 PATCH → 期望 412 或 428（先决条件失败 / 要求先决条件）
             sc_no_etag, _, _ = self._request("PATCH", uri, body={}, token=token)
-            self._record(f"PATCH {label} 不带 If-Match → 428", LEVEL_ERROR,
-                         sc_no_etag == 428,
-                         f"实际 HTTP {sc_no_etag}（期望 428）")
+            self._record(f"PATCH {label} 不带 If-Match → 412/428", LEVEL_ERROR,
+                         sc_no_etag in (412, 428),
+                         f"实际 HTTP {sc_no_etag}（期望 412 或 428）")
 
             # 2-3 带正确 ETag PATCH 空 JSON → 期望 200/204
             if etag:
+                noop_body = ({"AssetTag": body.get("AssetTag")}
+                             if isinstance(body, dict) and "AssetTag" in body else {})
                 sc_with, _, _ = self._request(
-                    "PATCH", uri, body={}, token=token,
+                    "PATCH", uri, body=noop_body, token=token,
                     extra_headers={"If-Match": etag}
                 )
                 self._record(f"PATCH {label} 带正确 If-Match → 200/204", LEVEL_ERROR,
@@ -396,12 +425,13 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         # 3-2 PATCH 支持（先 GET ETag，携带 If-Match 再 PATCH）
         etag = self._get_etag(self.chassis_uri, token)
         if not etag:
-            self.log.warning("  3-2: 未能获取 ETag，不携带 If-Match 的 PATCH 将被 BMC 以 428 拒绝，降级记 WARNING")
+            self.log.warning("  3-2: 未能获取 ETag，不携带 If-Match 的 PATCH 将被 BMC 以 412/428 拒绝，降级记 WARNING")
             self._record("PATCH 必须支持（200/204）", LEVEL_WARNING,
                          False, "无法获取 @odata.etag / ETag 响应头，PATCH 跳过（ETag 未暴露）")
         else:
             sc_patch, _, _ = self._request(
-                "PATCH", self.chassis_uri, body={}, token=token,
+                "PATCH", self.chassis_uri, body=self._noop_patch_body(self.chassis_uri, token),
+                token=token,
                 extra_headers={"If-Match": etag}
             )
             self._record("PATCH 必须支持（200/204）", LEVEL_ERROR,
@@ -435,9 +465,9 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
             if loc and (token or tok):
                 self._request("DELETE", loc, token=token or tok)
 
-        # 3-4 DELETE 必须支持（Session 删除 204 已验证）
-        self._record("DELETE 必须支持（Session 删除 204 已验证）", LEVEL_ERROR,
-                     self._session_delete_sc == 204,
+        # 3-4 DELETE 必须支持（200/204 均为成功响应）
+        self._record("DELETE 必须支持（200/204）", LEVEL_ERROR,
+                     self._session_delete_sc in (200, 204),
                      f"HTTP {self._session_delete_sc}")
 
         # 3-5 PUT 非必须，但 405 = 明确不支持（非 501 的话 WARNING）
@@ -473,10 +503,10 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self._record("错误凭据 → 401", LEVEL_ERROR,
                      sc_bad == 401, f"HTTP {sc_bad}（期望 401）")
 
-        # 4-4 If-Match 必须支持（不带返回 428）
+        # 4-4 If-Match 必须支持（不带返回 412 或 428）
         sc_428, _, _ = self._request("PATCH", self.chassis_uri, body={}, token=token)
-        self._record("If-Match 必须支持（不带时 → 428）", LEVEL_ERROR,
-                     sc_428 == 428, f"HTTP {sc_428}（期望 428）")
+        self._record("If-Match 必须支持（不带时 → 412/428）", LEVEL_ERROR,
+                     sc_428 in (412, 428), f"HTTP {sc_428}（期望 412 或 428）")
 
         # 4-5 POST 创建资源响应包含 Location header（DMTF 通用）
         self._record("POST 创建 Session 响应包含 Location header", LEVEL_WARNING,
@@ -508,9 +538,9 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
                      self._session_create_sc == 201,
                      f"HTTP {self._session_create_sc}")
 
-        # 204（Session 删除）
-        self._record("DELETE Session → 204", LEVEL_ERROR,
-                     self._session_delete_sc == 204,
+        # 204（Session 删除，200 亦为成功响应）
+        self._record("DELETE Session → 200/204", LEVEL_ERROR,
+                     self._session_delete_sc in (200, 204),
                      f"HTTP {self._session_delete_sc}")
 
         # 401
@@ -551,10 +581,10 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
         self._record("405 响应包含 Allow header（DMTF 通用）", LEVEL_WARNING,
                      bool(allow), f"Allow={allow!r}")
 
-        # 428（PATCH 不带 If-Match）
+        # 412/428（PATCH 不带 If-Match → Precondition Failed / Precondition Required）
         sc_428, _, _ = self._request("PATCH", self.chassis_uri, body={}, token=token)
-        self._record("PATCH 不带 If-Match → 428", LEVEL_ERROR,
-                     sc_428 == 428, f"HTTP {sc_428}")
+        self._record("PATCH 不带 If-Match → 412/428", LEVEL_ERROR,
+                     sc_428 in (412, 428), f"HTTP {sc_428}（期望 412 或 428）")
 
         # 412（带 If-Match 但 ETag 值错误 → Precondition Failed）
         sc_412, _, _ = self._request(
@@ -971,7 +1001,8 @@ class Protocol001DmtfCompliance(BmcEventTestBase):
             sc_patch_ok   = -1
         else:
             sc_patch_ok, patch_ok_body, _ = self._request(
-                "PATCH", self.chassis_uri, body={}, token=token,
+                "PATCH", self.chassis_uri, body=self._noop_patch_body(self.chassis_uri, token),
+                token=token,
                 extra_headers={"If-Match": etag_ch}
             )
             self._record("7-6 PATCH 成功 → 200 或 204", LEVEL_ERROR,

@@ -34,10 +34,12 @@ PASS 标准：
 """
 
 import argparse
+import datetime
 import json
 import logging
 import os
 import sys
+import time
 import traceback
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
@@ -117,6 +119,35 @@ class Event009SubmitTestEvent(BmcEventTestBase):
             # 响应校验本身失败不影响主判定
             self.log.info(f"  ℹ️  {label}: 响应结构校验跳过（{e}）")
 
+    def _submit_kwargs(self, required: set) -> dict:
+        """按 ActionInfo 的 Required 集合组装 SubmitTestEvent 参数。"""
+        try:
+            message_id, message_args = resolve_test_message(
+                self.client, self.test_message_id, self.test_message_args
+            )
+        except ValueError:
+            message_id, message_args = "Base.1.0.Success", []
+
+        kwargs = {"message_id": message_id}
+        if "MessageArgs" in required or not required:
+            kwargs["message_args"] = message_args
+        if "EventType" in required:
+            kwargs["event_type"] = self.event_types[0] if self.event_types else "StatusChange"
+        if "Message" in required:
+            kwargs["message"] = "Redfish SubmitTestEvent test"
+        if "Severity" in required:
+            kwargs["severity"] = "OK"
+        if "EventId" in required:
+            kwargs["event_id"] = f"submit-test-{int(time.time())}"
+        if "EventTimestamp" in required:
+            kwargs["event_timestamp"] = datetime.datetime.now(
+                datetime.timezone.utc).isoformat(timespec="seconds")
+        if "OriginOfCondition" in required:
+            systems = self.client.get_systems()
+            kwargs["origin_of_condition"] = (
+                {"@odata.id": systems[0].odata_id} if systems else None)
+        return kwargs
+
     def run_test(self):
         self.log.info(f"开始：{self.TEST_NAME}（{self.TEST_NUM}）")
         self.log.info("ℹ️  此操作将向所有订阅推送测试事件")
@@ -126,35 +157,30 @@ class Event009SubmitTestEvent(BmcEventTestBase):
         # v1.1.0：get_event_service().actions 获取 SubmitTestEvent 的 AllowableValues
         # 并探测参数形态（legacy=EventType / modern=MessageId）
         allowable = []
-        parameters = None
+        required = None
         try:
             event_service = self.client.get_event_service()
             actions = event_service.actions or {}
             allowable = (actions.get("#EventService.SubmitTestEvent", {})
                                 .get("EventType@Redfish.AllowableValues", []))
             self.log.info(f"  AllowableValues: {allowable}")
-            parameters = message_id_parameters(self.client, event_service)
+            required = message_id_parameters(self.client, event_service)
             self.log.info(f"  SubmitTestEvent 参数形态："
-                          f"{'legacy（EventType）' if parameters is None else f'modern（{sorted(parameters)}）'}")
+                          f"{'legacy（EventType）' if required is None else f'modern（Required={sorted(required)}）'}")
         except RedfishException:
             pass
 
         findings = []
         try:
             # ── modern 模式：MessageId 提交 ─────────────────────────────────
-            if parameters is not None:
+            if required is not None:
                 try:
-                    message_id, message_args = resolve_test_message(
-                        self.client, self.test_message_id, self.test_message_args
-                    )
-                    kwargs = {"message_id": message_id}
-                    if message_args and "MessageArgs" in parameters:
-                        kwargs["message_args"] = message_args
+                    kwargs = self._submit_kwargs(required)
                     self.client.submit_test_event(**kwargs)
                     findings.append({"item": "POST SubmitTestEvent（MessageId）→ 成功",
                                      "result": "PASS",
-                                     "detail": f"BMC 已接受，MessageId={message_id}"})
-                    self.log.info(f"  ✅ MessageId={message_id!r} → 成功")
+                                     "detail": f"BMC 已接受，MessageId={kwargs['message_id']}"})
+                    self.log.info(f"  ✅ MessageId={kwargs['message_id']!r} → 成功")
                     self._verify_response_message(findings, "MessageId 提交")
                 except ValueError as e:
                     # Registry 不可发现且未配置 TestMessageId：降级 WARNING 不 FAIL
