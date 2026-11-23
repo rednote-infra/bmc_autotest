@@ -179,7 +179,7 @@ python3 -m bmc.<脚本名> --help
 
 ```bash
 # 跑全部 suite（chassis / systems / managers / account / session /
-# update / protocol / ipmi / web / event / stress）
+# update / protocol / ipmi / web / event / stress / account_destructive）
 python3 -m bmc.bmc_runner -i <bmc_ip> -u <username> -p <password>
 ```
 
@@ -197,7 +197,13 @@ python3 -m bmc.bmc_runner -i <bmc_ip> -u <username> -p <password>
 | `--skip-no-storage` | 被测机型无存储卡（如通算/GPU 机型），跳过存储检查用例 | `--skip-no-storage` |
 
 支持的 suite 分组（见 [`conf/bmc/bmc_runner_suites.json`](conf/bmc/bmc_runner_suites.json)）：
-`chassis` / `systems` / `managers` / `account` / `session` / `update` / `protocol` / `ipmi` / `web` / `event` / `stress`
+`chassis` / `systems` / `managers` / `account` / `session` / `update` / `protocol` / `ipmi` / `web` / `event` / `stress` / `account_destructive`
+
+`account_destructive` 包含删除/禁用当前管理员的高风险反向测试。Runner 默认将该
+分组放在最后执行；执行任何破坏性变更前，测试必须先创建临时管理员，并通过独立
+Session 验证其可用性。若无法建立该恢复账号，测试返回 `BLOCKED` 且不会修改当前
+管理员；若恢复失败，Runner 会保留临时管理员供人工修复，并将后续用例标记为
+`BLOCKED`。
 
 #### 使用示例
 

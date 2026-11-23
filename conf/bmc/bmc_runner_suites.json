@@ -75,11 +75,9 @@
             "account_003c_password_negative_test",
             "account_004_role_test",
             "account_005a_delete_test",
-            "account_005b_delete_admin_negative_test",
             "account_006_max_count_test",
             "account_007_username_rule_test",
             "account_008a_disable_test",
-            "account_008b_disable_admin_negative_test",
             "account_009_online_users_test"
         ],
         "session": [
@@ -145,6 +143,10 @@
             "event_006_delete_subscription",
             "event_009_submit_test_event",
             "event_010_submit_event_negative"
+        ],
+        "account_destructive": [
+            "account_005b_delete_admin_negative_test",
+            "account_008b_disable_admin_negative_test"
         ]
     },
     "timeouts": {

@@ -11,9 +11,29 @@ Usage:
 """
 
 from dataclasses import dataclass, field
+import secrets
 from func.common_function import CommonFunction
-from redfish_sdk import RedfishClient, RedfishException
-from redfish_sdk.models import Account
+try:
+    from redfish_sdk import RedfishClient, RedfishException
+    from redfish_sdk.models import Account
+except ImportError:  # Allow offline safety tests without device dependencies.
+    RedfishClient = None
+
+    class RedfishException(Exception):
+        pass
+
+    class Account:
+        def __init__(self, **values):
+            aliases = {
+                "UserName": "user_name", "Password": "password",
+                "RoleId": "role_id", "Enabled": "enabled",
+                "PasswordChangeRequired": "password_change_required",
+            }
+            for key, value in values.items():
+                setattr(self, aliases.get(key, key), value)
+
+
+DESTRUCTIVE_SUITE_NAME = "account_destructive"
 
 # ── 角色名归一化（issue/19）───────────────────────────────────────────────────
 #
@@ -192,7 +212,11 @@ def snapshot_account(client: RedfishClient, username: str) -> "AccountSnapshot |
 
 # issue/9：用户名须符合规范（4~16位全英文字母），原 "bmc_guard_tmp" 含下划线，改为纯字母
 _GUARD_USERNAME = "bmcguardtmp"
-_GUARD_PASSWORD = "Guard@Test99"
+
+
+def _new_guard_password() -> str:
+    """Generate a unique high-entropy guard password for this run."""
+    return f"Gd!{secrets.token_urlsafe(18)}"
 
 
 @dataclass
@@ -202,11 +226,86 @@ class GuardAccount:
     password: str
     bmc_ip: str
     created_by_us: bool = False          # True = 我们创建的，teardown 时需删除
+    verified: bool = False
     existing_admins: list = field(default_factory=list)  # 发现时的全量超管列表（不含被测账号）
 
 
+def _verify_admin_session(bmc_ip: str, username: str, password: str,
+                          client_factory=None) -> bool:
+    """Verify credentials with a separate token session and an admin read."""
+    factory = client_factory or RedfishClient
+    if factory is None:
+        return False
+    verify_client = None
+    session = None
+    try:
+        verify_client = factory(bmc_ip, username, password)
+        session = verify_client.create_session(
+            username, password, switch_to_token_auth=True
+        )
+        if not getattr(session, "x_auth_token", None):
+            CommonFunction.print_log(
+                "ERROR", f"[Guard] Session for {username!r} returned no token"
+            )
+            return False
+        accounts = verify_client.get_accounts()
+        account = next((item for item in accounts
+                        if getattr(item, "user_name", None) == username), None)
+        return bool(
+            account
+            and getattr(account, "enabled", True) is True
+            and str(getattr(account, "role_id", "")).lower()
+            in ("administrator", "admin")
+        )
+    except Exception as exc:
+        CommonFunction.print_log(
+            "ERROR", f"[Guard] Independent session verification failed: {exc}"
+        )
+        return False
+    finally:
+        if verify_client and session and getattr(session, "id", None):
+            try:
+                verify_client.delete_session(session.id)
+            except Exception:
+                pass
+        if verify_client:
+            try:
+                verify_client.close()
+            except Exception:
+                pass
+
+
+def _complete_password_change(client, username: str, current_password: str) -> str | None:
+    """Clear PasswordChangeRequired and return the verified password candidate."""
+    accounts = client.get_accounts()
+    account = next((item for item in accounts
+                    if getattr(item, "user_name", None) == username), None)
+    if account is None:
+        return None
+    if getattr(account, "password_change_required", False) is not True:
+        return current_password
+
+    replacement = _new_guard_password()
+    updated = update_account_safe(
+        client,
+        username,
+        Account(Password=replacement, PasswordChangeRequired=False),
+    )
+    if not updated:
+        return None
+    refreshed = next((item for item in client.get_accounts()
+                      if getattr(item, "user_name", None) == username), None)
+    if refreshed is None or getattr(refreshed, "password_change_required", False) is True:
+        return None
+    CommonFunction.print_log(
+        "INFO", f"[Guard] Completed PasswordChangeRequired for {username!r}"
+    )
+    return replacement
+
+
 def setup_guard_account(client: RedfishClient, bmc_ip: str,
-                         protected_username: str) -> "GuardAccount | None":
+                         protected_username: str,
+                         client_factory=None) -> "GuardAccount | None":
     """在高危反向测试前建立 guard 账号（安全网）。
 
     策略：
@@ -246,6 +345,8 @@ def setup_guard_account(client: RedfishClient, bmc_ip: str,
 
     # 无论是否有冗余超管，都创建一个我们掌握密码的临时 guard 账号
     # 这是确保 restore_via_guard() 能真正登录执行恢复的唯一可靠手段
+    initial_password = _new_guard_password()
+    guard_created = False
     CommonFunction.print_log("INFO",
         f"[Guard] 尝试创建临时 guard 账号 {_GUARD_USERNAME!r}（Administrator 角色）...")
     try:
@@ -253,21 +354,46 @@ def setup_guard_account(client: RedfishClient, bmc_ip: str,
         _cleanup_stale_guard(client)
         client.add_account(Account(
             UserName=_GUARD_USERNAME,
-            Password=_GUARD_PASSWORD,
+            Password=initial_password,
             RoleId="Administrator",
             Enabled=True,
         ))
+        guard_created = True
+        verified_password = _complete_password_change(
+            client, _GUARD_USERNAME, initial_password
+        )
+        verified = bool(
+            verified_password
+            and _verify_admin_session(
+                bmc_ip, _GUARD_USERNAME, verified_password, client_factory
+            )
+        )
+        if not verified:
+            CommonFunction.print_log(
+                "ERROR", "[Guard] Guard account is not independently usable; mutation denied"
+            )
+            delete_account_safe(client, _GUARD_USERNAME)
+            return None
         CommonFunction.print_log("INFO",
             f"[Guard] 临时 guard 账号 {_GUARD_USERNAME!r} 创建成功，"
-            f"测试结束后将自动删除")
+            f"独立 Session 验证通过，测试结束后将自动删除")
         return GuardAccount(
             username=_GUARD_USERNAME,
-            password=_GUARD_PASSWORD,
+            password=verified_password,
             bmc_ip=bmc_ip,
             created_by_us=True,
+            verified=True,
             existing_admins=[a.user_name for a in existing_admins],
         )
-    except RedfishException as e:
+    except Exception as e:
+        if guard_created:
+            try:
+                delete_account_safe(client, _GUARD_USERNAME)
+            except Exception as cleanup_error:
+                CommonFunction.print_log(
+                    "ERROR",
+                    f"[Guard] 无法清理未验证的临时账号：{cleanup_error}",
+                )
         # 创建失败（账号数已满等）—— 若有已知冗余超管则降级提示，否则 WARNING
         if existing_admins:
             CommonFunction.print_log("WARNING",
@@ -314,12 +440,13 @@ def restore_via_guard(guard: "GuardAccount", broken_username: str,
     Returns:
         True：恢复成功；False：恢复失败
     """
-    if not guard.password:
+    if not guard.password or not guard.verified:
         CommonFunction.print_log("WARNING",
             f"[Guard] guard 账号 {guard.username!r} 密码未知，无法登录执行恢复")
         return False
 
     guard_client = None
+    verification_password = broken_password
     try:
         CommonFunction.print_log("INFO",
             f"[Guard] 使用 guard 账号 {guard.username!r} 登录 BMC 执行恢复...")
@@ -343,30 +470,47 @@ def restore_via_guard(guard: "GuardAccount", broken_username: str,
                 Password=broken_password,
                 RoleId=role_id,
                 Enabled=enabled,
+                PasswordChangeRequired=False,
             ))
             CommonFunction.print_log("INFO",
                 f"[Guard] 已重新创建账号 {broken_username!r}（role={role_id} enabled={enabled}）")
-            return True
 
         elif restore_action == "reenable":
             # 重新启用被禁用的账号
-            update_account_safe(guard_client, broken_username, Account(Enabled=True))
+            if not update_account_safe(
+                guard_client, broken_username, Account(Enabled=True)
+            ):
+                return False
             CommonFunction.print_log("INFO",
                 f"[Guard] 已重新启用账号 {broken_username!r}")
-            return True
 
         elif restore_action == "reset_password":
             # 重置账号密码为原始值
             new_password = restore_kwargs.get("new_password", broken_password)
-            update_account_safe(guard_client, broken_username, Account(Password=new_password))
+            verification_password = new_password
+            if not update_account_safe(
+                guard_client, broken_username, Account(Password=new_password)
+            ):
+                return False
             CommonFunction.print_log("INFO",
                 f"[Guard] 已重置账号 {broken_username!r} 密码")
-            return True
 
         else:
             CommonFunction.print_log("WARNING",
                 f"[Guard] 未知恢复类型 {restore_action!r}，跳过")
             return False
+
+        if not _verify_admin_session(
+            guard.bmc_ip, broken_username, verification_password
+        ):
+            CommonFunction.print_log(
+                "ERROR", f"[Guard] Recovery verification failed for {broken_username!r}"
+            )
+            return False
+        CommonFunction.print_log(
+            "INFO", f"[Guard] Recovery verified with fresh credentials for {broken_username!r}"
+        )
+        return True
 
     except RedfishException as e:
         CommonFunction.print_log("ERROR",

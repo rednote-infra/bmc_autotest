@@ -131,6 +131,7 @@ class AccountDeleteAdminNegativeTest(BmcTestBase):
 
         result = "PASS"
         guard = None
+        recovery_failed = False
         admin_snapshot = None   # 删除前的 Admin 配置快照，用于恢复时原样重建
 
         try:
@@ -138,11 +139,11 @@ class AccountDeleteAdminNegativeTest(BmcTestBase):
             CommonFunction.print_log("INFO",
                 "前置步骤：建立 guard 账号安全网（防止 Admin 被删后无法恢复）")
             guard = setup_guard_account(self.client, self.BMC_IP, self.USERNAME)
-            if guard is None:
+            if guard is None or not guard.verified:
                 CommonFunction.print_log("WARNING",
                     "  ✗ guard 账号建立失败（账号数已满或 BMC 权限不足），"
-                    "无安全网情况下禁止执行删除超管操作，本次测试跳过 → WARNING")
-                result = "WARNING"
+                    "无安全网情况下禁止执行删除超管操作，本次测试 → BLOCKED")
+                result = "BLOCKED"
                 raise RuntimeError("guard_not_ready")   # 跳至 finally 清理，不执行删除
 
             # ── 前置：备份 Admin 账号配置 ──────────────────────────────────────
@@ -183,9 +184,11 @@ class AccountDeleteAdminNegativeTest(BmcTestBase):
                             CommonFunction.print_log("WARNING",
                                 f"  ✓ Admin 账号已通过 guard 恢复，后续测试不受影响")
                         else:
+                            recovery_failed = True
                             CommonFunction.print_log("ERROR",
                                 f"  ✗ guard 恢复失败，Admin 账号丢失！请人工介入恢复 BMC 环境")
                     else:
+                        recovery_failed = True
                         CommonFunction.print_log("ERROR",
                             "  ✗ 无可用 guard 账号（无密码），Admin 账号丢失！请人工介入恢复")
                 else:
@@ -211,7 +214,7 @@ class AccountDeleteAdminNegativeTest(BmcTestBase):
 
         finally:
             # ── teardown：清理临时 guard 账号 ─────────────────────────────────
-            if guard and guard.created_by_us:
+            if guard and guard.created_by_us and not recovery_failed:
                 CommonFunction.print_log("INFO", "teardown：清理临时 guard 账号...")
                 # guard 账号可能是我们在 BMC 上建的，需用一个有效 session 删它
                 # 若 self.client 失效，尝试用 guard 自己的连接删自己
@@ -231,14 +234,20 @@ class AccountDeleteAdminNegativeTest(BmcTestBase):
                         _teardown_client.close()
                 except Exception:
                     pass
+            elif guard and recovery_failed:
+                CommonFunction.print_log(
+                    "ERROR",
+                    "Recovery failed; preserving the verified guard account for manual repair"
+                )
 
-        self.command_check_result = result
+        self.command_check_result = "RECOVERY_FAILED" if recovery_failed else result
         with open(self.result_csv_path, "a", encoding="utf-8") as f:
             f.write(f"delete_admin_negative,{result}\n")
         test.add_key_value_to_json(self.result_json_path, "detail.cycle",
                                    value={"metrics": "delete_admin_negative", "value": result})
         test.add_key_value_to_json(self.result_json_path, "summary",
-                                   value={"metrics": "超级管理员不可删除反向验证", "value": result})
+                                   value={"metrics": "超级管理员不可删除反向验证",
+                                          "value": "FAIL" if recovery_failed else result})
         test.print_log("INFO", f"超级管理员不可删除反向验证完成，结果：{result}")
 
 if __name__ == "__main__":
@@ -247,8 +256,10 @@ if __name__ == "__main__":
     try:
         checker = AccountDeleteAdminNegativeTest("AccountDeleteAdminNegativeTest")
         checker.run_test()
-        exit_code = 0 if checker.command_check_result in ("PASS", "WARNING") else \
-                            2 if checker.command_check_result == "FAIL" else 1
+        exit_code = {
+            "PASS": 0, "WARNING": 0, "FAIL": 2,
+            "BLOCKED": 4, "RECOVERY_FAILED": 5,
+        }.get(checker.command_check_result, 1)
         start_time = time.time()
         while (time.time() - start_time) < 5:
             time.sleep(1)
