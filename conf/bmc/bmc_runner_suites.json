@@ -147,6 +147,7 @@
             "event_010_submit_event_negative"
         ]
     },
+    "required_capabilities": [],
     "timeouts": {
         "default": 120,
         "chassis_007a_nvme_led_positive": 1500,
