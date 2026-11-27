@@ -6,6 +6,7 @@ Usage: python3 bmc/managers_018_firewall_check.py -i <bmc_ip> -u <username> -p <
 Update:
 2026/05/11: 新增，BMC 防火墙规则配置检查，验证 ActiveStrategy 和 Rules
 2026/10/16: SDK 1.3.0 适配 - 改用 get_firewall_rules() 类型化接口，URI 由 SDK 自动发现（issue/8）
+2026/11/26: 适配 AMI OEM Firewall 导航容器（Oem/Ami/Firewall 及其子集合）
 """
 
 import os
@@ -27,9 +28,9 @@ class Managers018FirewallCheck(BmcTestBase):
 
     用例编号：Redfish_Managers_018
     测试内容：
-    - GET /redfish/v1/Managers/1/SecurityService/FirewallRules 接口可达
-    - ActiveStrategy 存在且在 ["Accept", "Drop"] 中
-    - Rules 存在（list，可为空）
+    - GET Firewall 接口可达（URI 由 SDK 从 Manager OEM 链接动态发现）
+    - 旧形态：ActiveStrategy 存在且在 ["Accept", "Drop"] 中，Rules 为 list
+    - AMI 形态：FirewallConfig / IPRules / PortRules 子集合可达且 count 合法
     """
 
     def __init__(self, case: str):
@@ -53,33 +54,48 @@ class Managers018FirewallCheck(BmcTestBase):
                 password=self.PASSWORD
             )
 
-            # 1. GET FirewallRules 接口（SDK 1.3.0 类型化接口，URI 由 SDK 自动发现）
-            test.print_log("INFO", "=== 步骤1: 查询 FirewallRules 配置 ===")
-            fw_data = self.client.get_firewall_rules()
-            test.print_log("INFO", "FirewallRules 接口查询成功")
-            checks.append(("FirewallRules 接口查询成功", True))
+            # 1. GET Firewall（SDK 类型化接口，URI 由 SDK 从 OEM 链接自动发现）
+            test.print_log("INFO", "=== 步骤1: 查询 Firewall 配置 ===")
+            fw_data = self.client.get_firewall()
+            fw_uri = getattr(fw_data, "odata_id", None)
+            test.print_log("INFO", f"Firewall 接口查询成功: {fw_uri}")
+            checks.append(("Firewall 接口查询成功", True))
+            firewall_info["OdataId"] = fw_uri
 
-            # 2. ActiveStrategy 存在且在 ["Accept", "Drop"] 中（OEM 扩展字段，经 extra 保留可属性访问）
             active_strategy = getattr(fw_data, "ActiveStrategy", None)
-            strategy_ok = active_strategy in VALID_STRATEGIES
-            test.print_log("INFO",
-                f"ActiveStrategy: {'✓' if strategy_ok else '✗'} {active_strategy!r} "
-                f"（期望：{VALID_STRATEGIES}）")
-            checks.append(("ActiveStrategy 存在且在有效枚举中", strategy_ok))
-
-            # 3. Rules 存在（list，可为空，OEM 扩展字段）
             rules = getattr(fw_data, "Rules", None)
-            rules_ok = isinstance(rules, list)
-            rules_count = len(rules) if rules_ok else 0
-            test.print_log("INFO",
-                f"Rules: {'✓ 存在（list）' if rules_ok else '✗ 缺失或类型不对'} "
-                f"（数量：{rules_count}）")
-            checks.append(("Rules 存在（list）", rules_ok))
 
-            # 记录详细信息
-            firewall_info["ActiveStrategy"] = active_strategy
-            firewall_info["RulesCount"] = rules_count
-            firewall_info["Rules"] = rules
+            if active_strategy is not None or rules is not None:
+                # 旧形态：SecurityService/FirewallRules 风格，ActiveStrategy + Rules
+                strategy_ok = active_strategy in VALID_STRATEGIES
+                test.print_log("INFO",
+                    f"ActiveStrategy: {'✓' if strategy_ok else '✗'} {active_strategy!r} "
+                    f"（期望：{VALID_STRATEGIES}）")
+                checks.append(("ActiveStrategy 存在且在有效枚举中", strategy_ok))
+
+                rules_ok = isinstance(rules, list)
+                rules_count = len(rules) if rules_ok else 0
+                test.print_log("INFO",
+                    f"Rules: {'✓ 存在（list）' if rules_ok else '✗ 缺失或类型不对'} "
+                    f"（数量：{rules_count}）")
+                checks.append(("Rules 存在（list）", rules_ok))
+
+                firewall_info["ActiveStrategy"] = active_strategy
+                firewall_info["RulesCount"] = rules_count
+                firewall_info["Rules"] = rules
+            else:
+                # AMI/Enginetech 形态：导航容器指向三个子集合，无 ActiveStrategy/Rules
+                test.print_log("INFO",
+                    "未发现 ActiveStrategy/Rules，按 AMI OEM Firewall 子集合校验")
+                for kind in ("FirewallConfig", "IPRules", "PortRules"):
+                    coll = self.client.get_firewall_rule_collection(kind=kind)
+                    count = getattr(coll, "members_count", None)
+                    count_ok = isinstance(count, int)
+                    test.print_log("INFO",
+                        f"{kind}: {'✓ 可达' if count_ok else '✗ count 缺失'} "
+                        f"（数量：{count}）")
+                    checks.append((f"{kind} 子集合查询成功", count_ok))
+                    firewall_info[kind] = count
 
             final = "PASS" if all(r for _, r in checks) else "FAIL"
 

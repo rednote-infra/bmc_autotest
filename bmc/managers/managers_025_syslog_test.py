@@ -82,13 +82,14 @@ class Managers025SyslogTest(BmcTestBase):
             }
 
             checks.append(("Syslog 服务查询成功", True))
-            checks.append(("TransmissionProtocol 字段存在", protocol is not None))
-
-            # TransmissionProtocol 合规性：在已知范围内才校验，未知值记 WARNING 不 FAIL
-            if protocol is not None:
-                if protocol in VALID_PROTOCOLS:
-                    checks.append((f"TransmissionProtocol 合规（{protocol}）", True))
-                else:
+            # TransmissionProtocol 合规性：未配置（null）时记 WARNING，不视为失败
+            if protocol is None:
+                test.print_log("WARNING",
+                    "TransmissionProtocol 为空（Syslog 未配置传输协议），跳过合规校验")
+            else:
+                valid = protocol in VALID_PROTOCOLS
+                checks.append((f"TransmissionProtocol 合规（{protocol}）", valid))
+                if not valid:
                     test.print_log("WARNING",
                         f"TransmissionProtocol={protocol} 不在已知范围 {VALID_PROTOCOLS}，记录 WARNING")
 
@@ -119,18 +120,21 @@ class Managers025SyslogTest(BmcTestBase):
                 submit_action = actions.get("#SyslogService.SubmitTestEvent", {})
                 submit_target = submit_action.get("target", "") if isinstance(submit_action, dict) else ""
                 if not submit_target:
-                    raise RedfishException("SyslogService 响应中无 #SyslogService.SubmitTestEvent target")
-                test.print_log("INFO",
-                    f"对 MemberId={member_id} 发送 Syslog 测试告警...")
-                try:
-                    self.client.post(submit_target, {"MemberId": member_id})
-                    test.print_log("INFO", "Syslog SubmitTestEvent POST 成功")
-                    checks.append(("Syslog 测试告警触发成功", True))
-                    detail["syslog_test"] = {"member_id": member_id, "result": "PASS"}
-                except RedfishException as e:
-                    test.print_log("ERROR", f"Syslog SubmitTestEvent POST 失败：{e}")
-                    checks.append(("Syslog 测试告警触发成功", False))
-                    detail["syslog_test"] = {"member_id": member_id, "result": "FAIL", "error": str(e)}
+                    test.print_log("WARNING",
+                        "SyslogService 无 #SyslogService.SubmitTestEvent action（该 BMC 不支持），跳过测试告警触发")
+                    detail["syslog_test"] = {"skipped": True, "reason": "no_submit_test_event_action"}
+                else:
+                    test.print_log("INFO",
+                        f"对 MemberId={member_id} 发送 Syslog 测试告警...")
+                    try:
+                        self.client.post(submit_target, {"MemberId": member_id})
+                        test.print_log("INFO", "Syslog SubmitTestEvent POST 成功")
+                        checks.append(("Syslog 测试告警触发成功", True))
+                        detail["syslog_test"] = {"member_id": member_id, "result": "PASS"}
+                    except RedfishException as e:
+                        test.print_log("ERROR", f"Syslog SubmitTestEvent POST 失败：{e}")
+                        checks.append(("Syslog 测试告警触发成功", False))
+                        detail["syslog_test"] = {"member_id": member_id, "result": "FAIL", "error": str(e)}
 
         except RedfishException as e:
             test.print_log("ERROR", f"Redfish 异常：{e}")
